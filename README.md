@@ -1,6 +1,6 @@
 # codegraph-mcp
 
-Grafo (árvore/DAG) do seu projeto, exposto como servidor MCP pro Kimi
+Grafo (árvore/DAG) dos meus projetos, exposto como servidor MCP pro Kimi
 Code (ou qualquer cliente MCP) consultar sob demanda, em vez de carregar
 o projeto inteiro na janela de contexto.
 
@@ -12,7 +12,7 @@ Dois tipos de árvore, mais referências cruzadas entre elas:
   cada arquivo é quebrado em pedaços (funções/classes pra `.py`, seções
   pra `.md`, blocos de linha pro resto) -- cada pedaço é um nó
   `file_context` filho.
-- **`flow` -> `flow_step`**: fluxos de lógica do seu sistema, definidos à
+- **`flow` -> `flow_step`**: fluxos de lógica do sistema, que eu defino à
   mão em YAML (ver `flows/example.yaml`). Cada `flow_step` pode referenciar
   um ou mais `file_context`/`file` que o implementam -- essas referências
   viram **arestas** (tabela `edges`, não é hierarquia) do tipo
@@ -22,8 +22,8 @@ A ideia: quando o Kimi Code precisa entender um fluxo, ele chama
 `get_flow("nome_do_fluxo")` e recebe os passos **já resolvidos com o
 código real** de uma vez -- não precisa re-derivar aquilo lendo/buscando
 nos arquivos, nem carregar o projeto inteiro pra ter certeza de que
-entendeu certo. Isso é o que economiza tokens e acelera: reaproveitar
-uma leitura determinística já feita, em vez de reprocessar toda vez.
+entendeu certo. É isso que economiza tokens e acelera: reaproveito uma
+leitura determinística já feita, em vez de reprocessar toda vez.
 
 ## Instalação
 
@@ -72,15 +72,15 @@ steps:
   - name: "passo_1"
     description: "O que esse passo faz"
     refs:
-      - path: "src/auth.py"       # relativo à raiz que você indexou
+      - path: "src/auth.py"       # relativo à raiz que indexei
         symbol: "validate_login"  # nome de função/classe (Python) ou título de seção (Markdown)
                                    # sem `symbol`: liga no arquivo inteiro
 ```
 
 ## Registrar no Kimi Code
 
-Servidor MCP local (stdio). Adicionar em `.kimi-code/mcp.json` **dentro
-do projeto que você quer consultar** (config a nível de projeto, só ativa
+Servidor MCP local (stdio). Adiciono em `.kimi-code/mcp.json` **dentro
+do projeto que eu quero consultar** (config a nível de projeto, só ativa
 quando o Kimi Code abrir ali):
 
 ```json
@@ -101,7 +101,7 @@ quando o Kimi Code abrir ali):
 `cwd` tem que ser a pasta do `codegraph-mcp` (é de onde o `-m
 codegraph.server` resolve o pacote); `CODEGRAPH_DB` é o `.db` daquele
 projeto específico, gerado no passo de indexação acima -- **cada projeto
-que você quiser consultar precisa do seu próprio `mcp.json` apontando pro
+que eu quiser consultar precisa do seu próprio `mcp.json` apontando pro
 seu próprio `.db`**.
 
 Dentro do Kimi Code, `/mcp` mostra o status da conexão.
@@ -119,16 +119,16 @@ Dentro do Kimi Code, `/mcp` mostra o status da conexão.
 
 ## Status
 
-Primeira versão funcional -- testado indexando o próprio `codegraph-mcp`
-(10 arquivos, 40 contextos) e carregando `flows/example.yaml` (3 passos,
-3 referências resolvidas). Ainda não testado plugado de verdade no Kimi
+Primeira versão funcional -- testei indexando o próprio `codegraph-mcp`
+(11 arquivos, 48 contextos) e carregando `flows/example.yaml` (3 passos,
+3 referências resolvidas). Ainda não testei plugado de verdade no Kimi
 Code contra um projeto real.
 
-Próximos passos possíveis (não implementados ainda):
+Próximos passos que pretendo fazer (ainda não implementados):
 - Comando pra "re-sincronizar" fluxos quando os arquivos referenciados
   mudam de linha (hoje `refs` casa por `symbol` = nome, então sobrevive a
-  mudança de linha; mas se a função for renomeada, a referência quebra
-  silenciosamente até rodar `load-flows` de novo).
+  mudança de linha; mas se eu renomear a função, a referência quebra
+  silenciosamente até eu rodar `load-flows` de novo).
 - Chunking mais esperto pra linguagens além de Python (hoje só Python e
   Markdown têm chunk "inteligente"; o resto cai em blocos de linha fixos).
 - Extração assistida por LLM dos `flows/*.yaml` a partir do código, em
