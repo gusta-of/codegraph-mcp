@@ -1,0 +1,25 @@
+[project]
+name = "codegraph-mcp"
+version = "0.1.0"
+description = "Grafo de projeto (codigo + fluxos + historico de prompts) exposto como servidor MCP"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=2.0.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "starlette>=0.37",
+    "uvicorn>=0.30",
+    "tree-sitter>=0.23",
+    "tree-sitter-language-pack>=0.2",
+]
+
+[project.scripts]
+codegraph = "codegraph.cli:main"
+codegraph-up = "codegraph.up:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["codegraph*"]

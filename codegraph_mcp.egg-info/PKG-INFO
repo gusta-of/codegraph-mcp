@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: codegraph-mcp
+Version: 0.1.0
+Summary: Grafo de projeto (codigo + fluxos + historico de prompts) exposto como servidor MCP
+Requires-Python: >=3.10
+Requires-Dist: mcp>=2.0.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: httpx>=0.27
+Requires-Dist: starlette>=0.37
+Requires-Dist: uvicorn>=0.30
+Requires-Dist: tree-sitter>=0.23
+Requires-Dist: tree-sitter-language-pack>=0.2

@@ -173,7 +173,11 @@ def _chunk_file(path: Path, source: str) -> list[Chunk]:
 
 
 def _should_skip_dir(name: str) -> bool:
-    return name in IGNORE_DIRS or (name.startswith(".") and name != ".")
+    return (
+        name in IGNORE_DIRS
+        or (name.startswith(".") and name != ".")
+        or name.endswith((".egg-info", ".dist-info"))
+    )
 
 
 def iter_project_files(root: Path):

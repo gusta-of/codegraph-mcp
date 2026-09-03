@@ -4,9 +4,11 @@ Grafo (árvore/DAG) dos meus projetos, exposto como servidor MCP pro Kimi
 Code (ou qualquer cliente MCP) consultar sob demanda, em vez de carregar
 o projeto inteiro na janela de contexto.
 
-Isso aqui é o guia rápido de uso. Como o projeto funciona por dentro
-(schema, pipeline de indexação, como cada tool resolve suas queries) tá
-documentado em detalhe no [ARQUITETURA.md](ARQUITETURA.md).
+Instalação do zero (Windows/macOS/Linux, todas as variáveis de ambiente):
+[INSTALL.md](INSTALL.md). Isso aqui é o guia rápido de uso pra quem já
+tem tudo instalado. Como o projeto funciona por dentro (schema, pipeline
+de indexação, como cada tool resolve suas queries) tá documentado em
+detalhe no [ARQUITETURA.md](ARQUITETURA.md).
 
 ## O modelo de dados
 
@@ -38,23 +40,33 @@ leitura determinística já feita, em vez de reprocessar toda vez.
 ## Instalação
 
 ```bash
-cd ~/workspace/codegraph-mcp
+git clone <este-repo> && cd codegraph-mcp
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .
 ```
 
-## Uso -- integrar um projeto (um comando)
+`-e .` instala de verdade (não é `-r requirements.txt`) -- é o que faz
+os comandos `codegraph`/`codegraph-up` funcionarem de qualquer pasta,
+sem precisar `cd` pro `codegraph-mcp` toda vez. Detalhe completo (e o
+porquê) no `ARQUITETURA.md`, seção 2.1. Passo a passo multiplataforma
+completo, com todas as variáveis de ambiente: [INSTALL.md](INSTALL.md).
+
+## Uso -- subir tudo + integrar um projeto
 
 ```bash
-./setup-project.sh /caminho/do/projeto
+codegraph-up                          # sobe llama-server + proxy (variáveis de ambiente, ver INSTALL.md)
+codegraph setup /caminho/do/projeto   # indexa + registra + configura histórico, um comando
 ```
 
-Indexa o projeto, carrega `.codegraph/flows/*.yaml` se já existirem, e
-escreve/atualiza `.kimi-code/mcp.json` dentro do projeto (sem apagar
-outras entradas MCP que já estejam lá) -- as partes 1 e 3 do fluxo manual
-(ver `ARQUITETURA.md`), de uma vez. Roda de novo sempre que o projeto
-mudar -- é idempotente (arquivo sem mudança de hash é pulado, `mcp.json`
-é atualizado no lugar, não duplicado).
+(`./setup-project.sh /caminho/do/projeto` continua funcionando, é só um
+atalho Bash pro `codegraph setup` -- útil se eu preferir sem o `.venv`
+ativado.)
+
+`codegraph setup` indexa o projeto, carrega `.codegraph/flows/*.yaml` se
+já existirem, e escreve/atualiza `.kimi-code/mcp.json` dentro do projeto
+(sem apagar outras entradas MCP que já estejam lá) -- de uma vez. Roda de
+novo sempre que o projeto mudar -- é idempotente (arquivo sem mudança de
+hash é pulado, `mcp.json` é atualizado no lugar, não duplicado).
 
 Depois: **abrir uma sessão nova do Kimi Code** dentro do projeto (sessão
 já aberta antes não pega o `mcp.json` sozinha) e rodar `/mcp` pra
@@ -144,14 +156,14 @@ baixo. Isso exige duas mudanças de configuração, feitas **uma vez**:
 1. **`~/.kimi-code/config.toml`** -- troquei o `base_url` de
    `http://localhost:8080/v1` pra `http://localhost:8081/v1` (o proxy,
    não mais o `llama-server` direto). Já feito nesta máquina.
-2. **Subir o proxy antes de abrir o Kimi Code** -- adicionei um alias no
-   `~/.bashrc`, mesmo espírito do `llama-qwen`:
+2. **Subir o proxy** -- não precisa fazer isso separado: o próprio
+   `llama-qwen` (o alias que já uso pra subir o servidor) checa se o
+   proxy tá no ar e sobe ele sozinho, em segundo plano, se não estiver.
+   **Um comando só continua fazendo tudo** -- não virou uma ação a mais
+   pra lembrar. `codegraph-proxy` continua existindo como comando manual
+   (pra debug, ou subir só ele sem o modelo).
 
-   ```bash
-   codegraph-proxy
-   ```
-
-   ⚠️ **Sem isso rodando, o Kimi Code não fala com o modelo nenhum** --
+   ⚠️ **Sem o proxy rodando, o Kimi Code não fala com o modelo nenhum** --
    o `base_url` aponta só pro proxy, não tem mais fallback direto pro
    `llama-server`. Se algo quebrar e eu quiser voltar rápido: trocar o
    `base_url` de volta pra `:8080` no `config.toml`.

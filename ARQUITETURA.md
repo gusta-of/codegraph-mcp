@@ -26,15 +26,35 @@ modelo ter que re-derivar/re-descobrir uma lógica que já foi mapeada
 antes; (3) histórico consultável evita re-explicar contexto de conversas
 passadas a cada nova sessão.
 
+Guia de instalação completo, multiplataforma (Windows/macOS/Linux), com
+todas as variáveis de ambiente: [INSTALL.md](INSTALL.md). O que segue
+aqui é o "por dentro" de como cada peça funciona.
+
 ## 2. Configuração
 
 ### 2.1 Ambiente Python
 
 ```bash
-cd ~/workspace/codegraph-mcp
+cd codegraph-mcp
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .
 ```
+
+**`pip install -e .` (não `pip install -r requirements.txt`)** -- o
+projeto virou um pacote instalável de verdade (`pyproject.toml`), não só
+uma pasta de scripts soltos. Isso não é só estilo: sem isso, `python -m
+codegraph.algumacoisa` só funciona rodando de **dentro** da pasta do
+`codegraph-mcp` (o `-m` resolve pacote via `cwd`, e `codegraph` não
+estava instalado em lugar nenhum) -- foi um bug real, batido 3 vezes
+seguidas (no `mcp.json`, no `setup-project.sh`, no comando `setup`) antes
+de resolver na raiz instalando o pacote de verdade. Com `pip install -e
+.`, os comandos funcionam de **qualquer pasta**, sem exceção -- testado.
+
+`pyproject.toml` define dois comandos (`[project.scripts]`), instalados
+no `.venv` junto com o pacote:
+- `codegraph` -- CLI (`index`/`load-flows`/`stats`/`setup`), equivalente
+  a `python -m codegraph.cli`.
+- `codegraph-up` -- sobe `llama-server` + proxy num comando (ver 2.3).
 
 `requirements.txt`:
 ```
@@ -58,7 +78,31 @@ por engano (`mcp<2` fixado em algum lugar), o `import` quebra.
 `./graph.db`, relativo ao `cwd` do processo). Não tem arquivo de config
 separado pro servidor -- é só essa env var.
 
-### 2.3 Registro no Kimi Code
+### 2.3 `codegraph-up`: subir o modelo + o proxy num comando (`codegraph/up.py`)
+
+Multiplataforma de verdade (usa `subprocess.Popen`, não Bash) --
+`start_new_session=True` no Linux/macOS ou `CREATE_NEW_PROCESS_GROUP |
+DETACHED_PROCESS` no Windows (`os.name == "nt"`) pra desacoplar o
+processo filho do terminal que o lançou, funcionando nos dois mundos sem
+`if`/`else` de lógica, só a chamada de baixo nível diferente.
+
+Fluxo: checa se `llama-server` (porta `$CODEGRAPH_LLAMA_PORT`, default
+8080) já responde `/health` -- se sim, não sobe de novo; se não, exige
+`$CODEGRAPH_MODEL_PATH` (sem isso, erro claro e para, não tenta
+adivinhar caminho de ninguém) e sobe com `$CODEGRAPH_LLAMA_SERVER_BIN`
+(default: `llama-server`, precisa estar no `PATH`) + `$CODEGRAPH_LLAMA_ARGS`
+(default conservador: contexto pequeno, funciona em qualquer hardware --
+ver tabela completa no `INSTALL.md`). Mesma lógica pro proxy (porta
+`$CODEGRAPH_PROXY_PORT`, default 8081), usando `sys.executable -m
+codegraph.proxy` -- `sys.executable` já resolve o python certo (do
+`.venv` ativo), sem precisar adivinhar `.venv/bin/python` (Unix) vs
+`.venv\Scripts\python.exe` (Windows).
+
+Testado de verdade: matei o proxy, rodei `codegraph-up`, confirmou
+`llama-server` já rodando (skip) e subiu o proxy do zero, respondendo em
+segundos.
+
+### 2.4 Registro no Kimi Code
 
 Cada projeto que você quer consultar tem seu próprio `.kimi-code/mcp.json`
 (config a nível de projeto -- só ativa quando o Kimi Code abre ali):
@@ -362,8 +406,22 @@ Isso exige mudar o `base_url` **global** do Kimi Code
 (`~/.kimi-code/config.toml`, de `http://localhost:8080/v1` pra
 `http://localhost:8081/v1`) -- afeta todo projeto, não só um. Consequência
 direta: **o proxy precisa estar no ar antes de abrir o Kimi Code**, se
-não nada funciona (nem passthrough, nem chat). Alias de conveniência no
-`~/.bashrc`: `codegraph-proxy` (mesmo espírito do `llama-qwen`).
+não nada funciona (nem passthrough, nem chat).
+
+**Auto-start (2026-09-03)**: pra não virar mais uma ação manual pra
+lembrar, o próprio alias `llama-qwen` (`~/.bashrc`, uso pessoal desta
+máquina -- não faz parte do `codegraph-mcp` em si) checa `curl .../health`
+na porta 8081 antes de subir o `llama-server`, e se não responder, sobe
+o `codegraph.proxy` sozinho em segundo plano (`nohup`, dentro de um
+subshell com `cd` pro diretório certo). Isso foi escrito **antes** do
+`pip install -e .` existir (seção 2.1) -- hoje o `cd` nem seria mais
+necessário (o pacote resolve de qualquer `cwd`), mas não vale a pena
+mexer numa coisa que já funciona só por estética. A versão
+multiplataforma equivalente, sem `cd` nenhum porque não precisa mais, é
+o `codegraph-up` (seção 2.3) -- é o que deve ser documentado/usado por
+quem não é esta máquina específica. Efeito prático aqui: **o usuário só
+roda `llama-qwen`, igual antes** -- o número de
+ações manuais pra usar o sistema não aumentou por causa do histórico.
 
 ### 9.2 Qual projeto recebe o histórico
 
