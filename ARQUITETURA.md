@@ -3,6 +3,8 @@
 Documentação técnica de ponta a ponta: configuração, como os nós são
 gerados, como o grafo é armazenado, e como o servidor MCP expõe tudo
 isso pro Kimi Code. Pra instruções rápidas de uso, ver [README.md](README.md).
+Pra entender pra que cada parte serve sem termo técnico, ver
+[MAP_CODEGRAPH.md](MAP_CODEGRAPH.md).
 
 ## 1. Visão geral
 
