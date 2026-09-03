@@ -4,6 +4,10 @@ Grafo (árvore/DAG) dos meus projetos, exposto como servidor MCP pro Kimi
 Code (ou qualquer cliente MCP) consultar sob demanda, em vez de carregar
 o projeto inteiro na janela de contexto.
 
+Isso aqui é o guia rápido de uso. Como o projeto funciona por dentro
+(schema, pipeline de indexação, como cada tool resolve suas queries) tá
+documentado em detalhe no [ARQUITETURA.md](ARQUITETURA.md).
+
 ## O modelo de dados
 
 Dois tipos de árvore, mais referências cruzadas entre elas:
