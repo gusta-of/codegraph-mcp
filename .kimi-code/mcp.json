@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "/home/gustavo/workspace/codegraph-mcp/.venv/bin/python",
+      "args": [
+        "-m",
+        "codegraph.server"
+      ],
+      "cwd": "/home/gustavo/workspace/codegraph-mcp",
+      "env": {
+        "CODEGRAPH_DB": "/home/gustavo/workspace/codegraph-mcp/.codegraph/graph.db"
+      }
+    }
+  }
+}

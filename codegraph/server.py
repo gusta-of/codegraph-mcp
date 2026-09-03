@@ -130,5 +130,21 @@ def get_flow(name: str) -> dict:
     }
 
 
+@mcp.tool()
+def list_history(limit: int = 20) -> list[dict]:
+    """Lista as entradas de histórico de prompt+resposta mais recentes
+    (mais nova primeiro) -- cada prompt real que já foi enviado ao modelo
+    neste projeto, e a resposta que ele deu. Use pra lembrar do que já foi
+    discutido/decidido antes, em vez de perguntar de novo. `get_node` no
+    id devolvido traz o texto completo (prompt+resposta); `search` também
+    busca dentro do histórico (é indexado igual aos outros nós)."""
+    conn = _conn()
+    rows = db.get_recent(conn, "history", limit)
+    return [
+        {"id": r["id"], "preview": r["name"], "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
 if __name__ == "__main__":
     mcp.run()

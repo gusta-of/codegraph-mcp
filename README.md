@@ -21,6 +21,10 @@ Dois tipos de árvore, mais referências cruzadas entre elas:
   um ou mais `file_context`/`file` que o implementam -- essas referências
   viram **arestas** (tabela `edges`, não é hierarquia) do tipo
   `implements_in`.
+- **`history`**: cada troca prompt+resposta real, capturada sozinha pelo
+  proxy (ver seção "Histórico de prompts" abaixo). Lista plana, sem
+  filhos -- e o único tipo que é apagado automaticamente quando o banco
+  passa de um teto de tamanho configurável (indexação nunca é apagada).
 
 A ideia: quando o Kimi Code precisa entender um fluxo, ele chama
 `get_flow("nome_do_fluxo")` e recebe os passos **já resolvidos com o
@@ -37,30 +41,39 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## Uso -- indexar um projeto
-
-O grafo de cada projeto fica no seu próprio arquivo SQLite (`--db`, não
-precisa estar dentro do `codegraph-mcp`):
+## Uso -- integrar um projeto (um comando)
 
 ```bash
+./setup-project.sh /caminho/do/projeto
+```
+
+Indexa o projeto, carrega `.codegraph/flows/*.yaml` se já existirem, e
+escreve/atualiza `.kimi-code/mcp.json` dentro do projeto (sem apagar
+outras entradas MCP que já estejam lá) -- as partes 1 e 3 do fluxo manual
+(ver `ARQUITETURA.md`), de uma vez. Roda de novo sempre que o projeto
+mudar -- é idempotente (arquivo sem mudança de hash é pulado, `mcp.json`
+é atualizado no lugar, não duplicado).
+
+Depois: **abrir uma sessão nova do Kimi Code** dentro do projeto (sessão
+já aberta antes não pega o `mcp.json` sozinha) e rodar `/mcp` pra
+confirmar a conexão.
+
+O grafo de cada projeto fica no seu próprio arquivo SQLite
+(`<projeto>/.codegraph/graph.db>`), não dentro do `codegraph-mcp`.
+
+### Passo a passo manual (o que o script acima faz por baixo)
+
+```bash
+# 1. indexar
 .venv/bin/python -m codegraph.cli --db /caminho/do/projeto/.codegraph/graph.db \
   index /caminho/do/projeto
-```
 
-Rodar de novo é seguro e rápido -- arquivos sem mudança (mesmo hash de
-conteúdo) são pulados, só o que mudou é re-indexado.
-
-Carregar os fluxos de lógica (depois de indexar, pra `symbol` conseguir
-casar com os `file_context` já existentes):
-
-```bash
+# 2. (opcional) carregar fluxos, depois de indexar -- pra `symbol` casar
+#    com os `file_context` já existentes
 .venv/bin/python -m codegraph.cli --db /caminho/do/projeto/.codegraph/graph.db \
   load-flows /caminho/do/projeto/.codegraph/flows
-```
 
-Conferir o que entrou:
-
-```bash
+# conferir o que entrou
 .venv/bin/python -m codegraph.cli --db /caminho/do/projeto/.codegraph/graph.db stats
 ```
 
@@ -83,7 +96,9 @@ steps:
 
 ## Registrar no Kimi Code
 
-Servidor MCP local (stdio). Adiciono em `.kimi-code/mcp.json` **dentro
+O `setup-project.sh` já faz isso sozinho (seção acima). Só documentando
+o que ele escreve, caso eu precise editar à mão ou entender o formato:
+servidor MCP local (stdio), registrado em `.kimi-code/mcp.json` **dentro
 do projeto que eu quero consultar** (config a nível de projeto, só ativa
 quando o Kimi Code abrir ali):
 
@@ -110,6 +125,56 @@ seu próprio `.db`**.
 
 Dentro do Kimi Code, `/mcp` mostra o status da conexão.
 
+## Histórico de prompts (memória)
+
+Cada prompt real que mando pro modelo e a resposta que ele devolve viram
+um nó `history` no grafo, automaticamente -- sem eu ter que pedir. Assim
+o modelo consegue puxar conversas anteriores do mesmo projeto (via
+`search`/`list_history`) em vez de eu ter que reexplicar contexto toda
+sessão nova.
+
+### Como funciona (visão rápida -- detalhe técnico completo no `ARQUITETURA.md`)
+
+Um **proxy** (`codegraph/proxy.py`, porta 8081) fica entre o Kimi Code e
+o `llama-server`: repassa tudo transparente e grava prompt+resposta por
+baixo. Isso exige duas mudanças de configuração, feitas **uma vez**:
+
+1. **`~/.kimi-code/config.toml`** -- troquei o `base_url` de
+   `http://localhost:8080/v1` pra `http://localhost:8081/v1` (o proxy,
+   não mais o `llama-server` direto). Já feito nesta máquina.
+2. **Subir o proxy antes de abrir o Kimi Code** -- adicionei um alias no
+   `~/.bashrc`, mesmo espírito do `llama-qwen`:
+
+   ```bash
+   codegraph-proxy
+   ```
+
+   ⚠️ **Sem isso rodando, o Kimi Code não fala com o modelo nenhum** --
+   o `base_url` aponta só pro proxy, não tem mais fallback direto pro
+   `llama-server`. Se algo quebrar e eu quiser voltar rápido: trocar o
+   `base_url` de volta pra `:8080` no `config.toml`.
+
+3. `setup-project.sh` já cuida do resto sozinho: cria
+   `.kimi-code/codegraph-history.json` (teto de armazenamento, default
+   15360 MB = 15 GiB) e marca o projeto como "ativo" -- é pra esse
+   projeto que o proxy grava enquanto eu não rodar o script de novo em
+   outro.
+
+### Teto de armazenamento
+
+`.kimi-code/codegraph-history.json`, ao lado do `mcp.json`:
+
+```json
+{ "max_history_mb": 15360 }
+```
+
+Só conta o espaço dos nós `history` -- indexação de projeto nunca é
+apagada, mesmo que o banco inteiro passe do teto por causa dela sozinha.
+Quando o histórico passa do limite, as entradas mais antigas são
+apagadas primeiro (assumo que são as menos valiosas). Testado de
+verdade: inseri ~5 MB de histórico, forcei um teto apertado, e o arquivo
+`.db` encolheu de volta depois do expurgo.
+
 ## Tools expostas
 
 | Tool | O que faz |
@@ -117,16 +182,20 @@ Dentro do Kimi Code, `/mcp` mostra o status da conexão.
 | `list_files()` | Lista todos os arquivos indexados |
 | `get_file_tree(path)` | Nó `file` + lista dos `file_context` filhos (nome/linhas, sem conteúdo) |
 | `get_node(node_id)` | Nó completo (com conteúdo) + filhos + arestas relacionadas |
-| `search(query, limit)` | Busca full-text (sintaxe FTS5) por nome/conteúdo em qualquer nó |
+| `search(query, limit)` | Busca full-text (sintaxe FTS5) por nome/conteúdo em qualquer nó -- inclui histórico |
 | `list_flows()` | Lista os fluxos de lógica carregados |
 | `get_flow(name)` | Fluxo completo: passos em ordem, cada um já resolvido com o código que o implementa |
+| `list_history(limit)` | Entradas de prompt+resposta mais recentes deste projeto, mais nova primeiro |
 
 ## Status
 
-Primeira versão funcional -- testei indexando o próprio `codegraph-mcp`
-(11 arquivos, 48 contextos) e carregando `flows/example.yaml` (3 passos,
-3 referências resolvidas). Ainda não testei plugado de verdade no Kimi
-Code contra um projeto real.
+Testado de ponta a ponta: indexação (16 arquivos, 82 contextos, nesta
+sessão indexando o próprio repo), fluxos (`flows/example.yaml`, 3 passos
+resolvidos), e agora o histórico de prompts -- proxy rodando de verdade,
+passthrough validado (`/health`, `/v1/models`, chat com streaming), e
+prompt+resposta gravados e recuperáveis via `list_history`. Ainda não
+testei uma sessão inteira do Kimi Code (interativa, não só `curl`) usando
+o proxy do início ao fim.
 
 Próximos passos que pretendo fazer (ainda não implementados):
 - Comando pra "re-sincronizar" fluxos quando os arquivos referenciados
@@ -137,3 +206,7 @@ Próximos passos que pretendo fazer (ainda não implementados):
   Markdown têm chunk "inteligente"; o resto cai em blocos de linha fixos).
 - Extração assistida por LLM dos `flows/*.yaml` a partir do código, em
   vez de escrever à mão.
+- Comando pra trocar de "projeto ativo" (histórico) sem precisar
+  re-rodar `setup-project.sh` inteiro (hoje dá pra fazer chamando
+  `state.set_active_project()` direto em Python, mas não tem CLI pra isso
+  ainda).

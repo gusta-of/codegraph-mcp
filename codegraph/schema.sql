@@ -1,9 +1,15 @@
 -- Um nó representa: arquivo, um pedaço (contexto) de um arquivo, um fluxo
--- de lógica, ou um passo de um fluxo. Hierarquia (parent_id) modela a
--- árvore/DAG: file -> file_context, flow -> flow_step.
+-- de lógica, um passo de um fluxo, ou uma entrada de histórico de prompt.
+-- Hierarquia (parent_id) modela a árvore/DAG: file -> file_context,
+-- flow -> flow_step. `history` não tem pai (lista plana, ordenada por
+-- created_at).
+--
+-- `history` é o único tipo permanentemente sujeito a expurgo (ver
+-- codegraph/history.py) -- file/file_context/flow/flow_step são dados de
+-- indexação, nunca apagados automaticamente.
 CREATE TABLE IF NOT EXISTS nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    type TEXT NOT NULL CHECK (type IN ('file', 'file_context', 'flow', 'flow_step')),
+    type TEXT NOT NULL CHECK (type IN ('file', 'file_context', 'flow', 'flow_step', 'history')),
     parent_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     path TEXT,

@@ -15,11 +15,16 @@ já indexado, sob demanda, via tools MCP. O grafo guarda:
   pedaços menores (funções, seções, blocos).
 - **Fluxos de lógica**: definidos à mão em YAML, cada passo do fluxo
   ligado ao trecho de código real que o implementa.
+- **Histórico de prompts**: cada troca prompt<->resposta real, capturada
+  automaticamente por um proxy entre o Kimi Code e o `llama-server` (ver
+  seção 9) -- o modelo consegue "lembrar" de conversas anteriores do
+  mesmo projeto sem precisar que o usuário cole isso de novo.
 
-O ganho de token/velocidade vem de duas coisas: (1) só carrega o pedaço
+O ganho de token/velocidade vem de três coisas: (1) só carrega o pedaço
 relevante, não o projeto inteiro; (2) fluxos já resolvidos evitam o
 modelo ter que re-derivar/re-descobrir uma lógica que já foi mapeada
-antes.
+antes; (3) histórico consultável evita re-explicar contexto de conversas
+passadas a cada nova sessão.
 
 ## 2. Configuração
 
@@ -35,6 +40,9 @@ python3 -m venv .venv
 ```
 mcp>=2.0.0       # SDK oficial do Model Context Protocol (classe MCPServer)
 pyyaml>=6.0      # parse dos arquivos flows/*.yaml
+httpx>=0.27      # cliente HTTP async -- o proxy usa pra falar com o llama-server
+starlette>=0.37  # framework ASGI minimo -- roteamento do proxy
+uvicorn>=0.30    # servidor ASGI que roda o proxy
 ```
 
 Nota de versão: o SDK `mcp` fez uma mudança de API entre a v1 e a v2 --
@@ -231,6 +239,7 @@ sem cache em memória.
 | `search` | `query`, `limit` | `SELECT ... FROM nodes_fts WHERE nodes_fts MATCH ? ORDER BY rank` -- sintaxe FTS5 (`"auth AND token"`, etc.) |
 | `list_flows` | -- | `db.get_roots(conn, "flow")` |
 | `get_flow` | `name` | acha o `flow` pelo nome, resolve cada `flow_step` filho e segue as arestas `implements_in` até os `file_context`/`file` de destino, trazendo o **conteúdo real** de cada um |
+| `list_history` | `limit` | `db.get_recent(conn, "history", limit)` -- entradas de prompt+resposta mais recentes primeiro (ver seção 9) |
 
 `get_flow` é a tool que carrega o mecanismo central do projeto: um
 fluxo pedido de uma vez só já vem com o código-fonte relevante embutido,
@@ -238,28 +247,151 @@ sem o cliente precisar de uma segunda chamada por passo.
 
 ## 7. Fluxo ponta a ponta (exemplo real)
 
+Via `./setup-project.sh proj/` (recomendado -- faz os passos 1-3 de uma
+vez, incluindo merge cuidadoso no `mcp.json` sem apagar outras entradas
+que já estejam lá), ou manualmente:
+
 1. `codegraph.cli --db proj/.codegraph/graph.db index proj/` -- varre
    `proj/`, cria nós `file`/`file_context`.
 2. `codegraph.cli --db proj/.codegraph/graph.db load-flows proj/.codegraph/flows/` --
    lê os YAML, cria nós `flow`/`flow_step`, liga via `edges`.
 3. `.kimi-code/mcp.json` dentro de `proj/` diz pro Kimi Code subir
    `codegraph/server.py` com `CODEGRAPH_DB=proj/.codegraph/graph.db`.
-4. Dentro de uma sessão do Kimi Code, o modelo decide chamar
-   `get_flow("nome_do_fluxo")` em vez de ler os arquivos um por um --
-   uma tool call, uma resposta, com o código já dentro.
+4. Abrir uma sessão **nova** do Kimi Code dentro de `proj/` -- ele só lê
+   o `mcp.json` na hora que inicia; uma sessão que já estava aberta antes
+   do arquivo existir/mudar não recarrega sozinha.
+5. Dentro da sessão, o modelo decide chamar `get_flow("nome_do_fluxo")`
+   em vez de ler os arquivos um por um -- uma tool call, uma resposta,
+   com o código já dentro. `/mcp` dentro do Kimi Code confirma a conexão.
 
-Esse ciclo (passos 1-2) precisa ser **re-rodado manualmente** depois de
-mudanças relevantes no projeto -- não tem watch/auto-reindex hoje (ver
-"Próximos passos" no README).
+Esse ciclo (passos 1-2, ou `setup-project.sh` de novo) precisa ser
+**re-rodado manualmente** depois de mudanças relevantes no projeto --
+não tem watch/auto-reindex hoje (ver "Próximos passos" no README). É
+idempotente: rodar de novo sem mudança nenhuma só confirma que está tudo
+sincronizado (`0 indexado(s), N sem mudança`).
 
 ## 8. Mapa de arquivos
 
 | Arquivo | Responsabilidade |
 |---|---|
 | `codegraph/schema.sql` | Definição das tabelas `nodes`/`edges`/`nodes_fts` + triggers |
-| `codegraph/db.py` | Camada fina sobre `sqlite3` -- todo SQL do projeto vive aqui |
+| `codegraph/db.py` | Camada fina sobre `sqlite3` -- todo SQL do projeto vive aqui, + migração de schema |
 | `codegraph/indexer.py` | Parte 1: varredura + chunking + geração de nós `file`/`file_context` |
 | `codegraph/flows.py` | Parte 2: parse de YAML + geração de nós `flow`/`flow_step` + arestas |
-| `codegraph/server.py` | Servidor MCP -- as 6 tools |
+| `codegraph/history.py` | Parte 3: grava nós `history` (prompt+resposta) + expurgo por tamanho |
+| `codegraph/state.py` | Guarda/lê qual projeto está "ativo" (pra onde o proxy grava histórico) |
+| `codegraph/proxy.py` | Proxy HTTP entre Kimi Code e llama-server -- passthrough + captura de histórico |
+| `codegraph/server.py` | Servidor MCP -- as 7 tools |
 | `codegraph/cli.py` | Comandos `index`/`load-flows`/`stats`, sem precisar do servidor no ar |
+| `setup-project.sh` | Indexa + registra `mcp.json` + config de histórico + marca projeto ativo, num comando |
 | `flows/*.yaml` | Definições de fluxo (não é código -- é dado, editado à mão) |
+
+## 9. Histórico de prompts (memória)
+
+Cada prompt que o usuário manda e a resposta que o modelo devolve viram
+um nó `history` no grafo -- capturados automaticamente, sem o modelo
+precisar chamar tool nenhuma pra "salvar". Só entradas desse tipo são
+sujeitas a expurgo por tamanho; indexação de projeto é permanente.
+
+### 9.1 Por que precisa de um proxy
+
+O Kimi Code é um binário fechado -- não dá pra interceptar o que ele
+manda pro modelo de dentro dele. O jeito é colocar um **proxy HTTP**
+(`codegraph/proxy.py`, porta 8081) no meio: o Kimi Code fala com o
+proxy, o proxy repassa pro `llama-server` de verdade (porta 8080),
+deixa a resposta passar de volta (streaming incluso, byte a byte), e
+**enquanto isso** grava prompt+resposta.
+
+Isso exige mudar o `base_url` **global** do Kimi Code
+(`~/.kimi-code/config.toml`, de `http://localhost:8080/v1` pra
+`http://localhost:8081/v1`) -- afeta todo projeto, não só um. Consequência
+direta: **o proxy precisa estar no ar antes de abrir o Kimi Code**, se
+não nada funciona (nem passthrough, nem chat). Alias de conveniência no
+`~/.bashrc`: `codegraph-proxy` (mesmo espírito do `llama-qwen`).
+
+### 9.2 Qual projeto recebe o histórico
+
+O `llama-server` não é escopado por projeto -- só existe um rodando,
+compartilhado por qualquer projeto que o Kimi Code tenha aberto. O proxy
+também não sabe de qual projeto é uma requisição. Solução: um arquivo de
+estado simples, `~/.codegraph/active-project` (`codegraph/state.py`),
+guardando o path do projeto ativo agora. O proxy lê esse arquivo em cada
+requisição de chat. `setup-project.sh` marca o projeto que acabou de
+configurar como ativo automaticamente; pra trocar de projeto sem
+re-indexar, dá pra chamar `state.set_active_project()` direto.
+
+Se não tem projeto ativo (arquivo não existe), o proxy só faz
+passthrough, sem gravar nada -- não quebra, só não loga.
+
+### 9.3 Como o proxy captura prompt+resposta (proxy.py)
+
+Rota `/v1/chat/completions` (a única com lógica especial -- todo o resto
+é passthrough genérico, `passthrough()`):
+
+1. Lê o corpo da requisição, extrai a **última mensagem `role=user`**
+   (`_last_user_message`) -- não a conversa inteira, só o que é novo
+   nesse turno (a conversa toda já vem re-enviada pelo cliente a cada
+   turno; logar tudo de novo toda vez duplicaria histórico
+   quadraticamente).
+2. Repassa a requisição pro `llama-server`, idêntica.
+3. **Sem streaming**: espera a resposta completa, extrai `content` e
+   `reasoning_content` do JSON.
+4. **Com streaming** (o caso normal -- Kimi Code manda `stream: true`):
+   itera `aiter_bytes()` do jeito que chega, **repassa cada chunk pro
+   cliente imediatamente sem reformatar** (só transparência garante que
+   o parser SSE do Kimi Code não quebra), e em paralelo acumula os
+   mesmos bytes num buffer, separando por `\n\n` (fronteira de evento
+   SSE) só pra extrair `delta.content`/`delta.reasoning_content` de cada
+   chunk `data: {...}` -- é leitura, não reescrita do que o cliente
+   recebe.
+5. Quando o stream fecha, grava o nó `history` (`history.record_exchange`)
+   numa task assíncrona separada (`asyncio.create_task`) -- não atrasa a
+   resposta ao cliente esperando a escrita no SQLite.
+
+`content` guardado no nó é só o texto final (`PROMPT:\n...\n\nRESPONSE:\n...`)
+-- o `reasoning_content` **não** entra no `content` (só a contagem de
+caracteres, em `metadata`), pra não inflar o histórico com raciocínio
+interno que não serve pra nada numa consulta futura.
+
+### 9.4 Limite de tamanho e expurgo (history.py)
+
+Config por projeto, `.kimi-code/codegraph-history.json` (ao lado do
+`mcp.json`, criado pelo `setup-project.sh` na primeira vez, nunca
+sobrescrito depois):
+
+```json
+{ "max_history_mb": 15360 }
+```
+
+15360 MB = 15 GiB, o default (`DEFAULT_MAX_HISTORY_MB`). **Esse limite
+conta só o espaço ocupado pelos nós `history`** -- indexação
+(file/file_context/flow/flow_step) nunca é contada nem apagada por esse
+mecanismo, mesmo que sozinha já exceda o limite (nesse caso o expurgo
+simplesmente para quando não sobra mais `history` pra remover, ver
+`enforce_limit`).
+
+Mecânica: depois de cada `record_exchange`, `enforce_limit` mede o
+tamanho real do arquivo `.db` (`os.path.getsize`) e, enquanto estiver
+acima do limite, apaga o nó `history` mais antigo (`created_at ASC`) um
+de cada vez, re-medindo depois de cada delete.
+
+Isso só funciona porque o banco roda com **`auto_vacuum = FULL`** --
+sem isso, `DELETE` no SQLite não libera espaço em disco de verdade (as
+páginas ficam reservadas até um `VACUUM` manual), e `enforce_limit`
+ficaria apagando pra sempre sem o tamanho do arquivo nunca cair.
+`db._migrate()` liga isso automaticamente (via `PRAGMA auto_vacuum=FULL`
++ `VACUUM` uma vez) em bancos criados antes dessa migração existir --
+testado de verdade: inserido ~5 MB de histórico, forçado um teto
+apertado, e o arquivo `.db` realmente encolheu de volta depois do
+expurgo.
+
+### 9.5 Migração de schema (db.py)
+
+Bancos criados antes do tipo `history` existir têm o `CHECK` antigo
+(só file/file_context/flow/flow_step) fisicamente gravado no arquivo --
+`CREATE TABLE IF NOT EXISTS` não atualiza um `CHECK` de tabela já
+existente. `db._migrate()`, rodado a cada `connect()`, detecta isso
+(lendo `sqlite_master`) e reconstrói só a tabela `nodes` (via
+`ALTER TABLE ... RENAME` + recriar + copiar dados), preservando tudo
+que já tava lá. Roda uma vez só -- depois da primeira migração, o
+`CHECK` já bate e a função não faz nada nas próximas conexões.
