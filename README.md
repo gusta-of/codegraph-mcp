@@ -230,16 +230,36 @@ re-processa arquivos que já estavam indexados e não mudaram. Rodei
 `rm .codegraph/graph.db` + `setup-project.sh` de novo pra ver o efeito
 em tudo -- é o jeito de sempre que eu mudar como o chunking funciona.
 
+## Dashboard de efetividade
+
+```
+http://localhost:8081/dashboard
+```
+
+(o proxy já expõe isso sozinho, não precisa subir nada a mais). Mostra,
+com dado real do projeto ativo: cobertura de indexação (% de contextos
+com chunking de verdade vs. fallback de linha), volume de conversas,
+% de trocas que usaram alguma tool do `codegraph-mcp`, tokens/s médio de
+geração, e uma estimativa de tokens poupados -- **estimativa mesmo,
+rotulada como tal no rodapé da página**, não finjo que é medição exata
+(explicado em detalhe no `ARQUITETURA.md`, seção 10). Os números de
+token/velocidade são reais, direto do `llama-server` (`usage`/`timings`
+da API) -- isso sim é medição, não estimativa.
+
+`?project=/caminho/de/outro/projeto` na URL pra ver o dashboard de um
+projeto que não é o ativo no momento.
+
 ## Status
 
 Testado de ponta a ponta: indexação com chunking genérico (regressão
 confirmada em Python, mais SQL/Bash/HTML+JS testados), fluxos
 (`flows/example.yaml`, 3 passos resolvidos, sobreviveu à troca de
-chunker), e histórico de prompts -- proxy rodando de verdade, passthrough
-validado (`/health`, `/v1/models`, chat com streaming), e prompt+resposta
-gravados e recuperáveis via `list_history`. Ainda não testei uma sessão
-inteira do Kimi Code (interativa, não só `curl`) usando o proxy do início
-ao fim.
+chunker), histórico de prompts (agora com sessão real do Kimi Code
+passando pelo proxy, não só `curl` -- confirmado processo filho
+`codegraph.server` rodando de dentro da sessão real), instalação como
+pacote de verdade (`pip install -e .`, comandos funcionando de qualquer
+pasta), e o dashboard de efetividade (`/dashboard`), com dado real de um
+projeto de 412 arquivos.
 
 Próximos passos que pretendo fazer (ainda não implementados):
 - Comando pra "re-sincronizar" fluxos quando os arquivos referenciados
@@ -255,3 +275,10 @@ Próximos passos que pretendo fazer (ainda não implementados):
   ainda).
 - Re-chunking automático quando o algoritmo de chunking muda (hoje é
   manual: apagar o `.db` e reindexar do zero).
+- `save_flow`: tool MCP pra o próprio agente gravar um flow durante a
+  sessão (em vez de exigir YAML escrito à mão antes) -- discutido, não
+  implementado ainda.
+- Medição exata de "tokens poupados" (hoje é estimativa por tamanho
+  médio, ver `ARQUITETURA.md` seção 10.2) -- rastrear de verdade exigiria
+  acompanhar o conteúdo de cada resultado de tool call através dos
+  turnos da conversa.

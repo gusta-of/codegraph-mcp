@@ -509,3 +509,70 @@ existente. `db._migrate()`, rodado a cada `connect()`, detecta isso
 `ALTER TABLE ... RENAME` + recriar + copiar dados), preservando tudo
 que já tava lá. Roda uma vez só -- depois da primeira migração, o
 `CHECK` já bate e a função não faz nada nas próximas conexões.
+
+## 10. Medindo efetividade (`codegraph/metrics.py` + rota `/dashboard`)
+
+Motivação: "o projeto ajuda mesmo?" não pode ser resposta de opinião --
+tem que vir de dado real. Duas categorias de métrica, com honestidade
+sobre o que é medido de verdade e o que é estimado.
+
+### 10.1 O que é medido de verdade
+
+O `llama-server` devolve `usage` (tokens) e `timings` (velocidade) no
+final da resposta -- inclusive em streaming, mas só se o request pedir
+`stream_options: {"include_usage": true}` (testado: sem isso, o campo
+`usage` não vem no streaming). O proxy (`chat_completions` em
+`proxy.py`) injeta esse parâmetro automaticamente em toda requisição de
+chat antes de repassar pro `llama-server` -- o Kimi Code não precisa
+pedir isso sozinho.
+
+Capturado por troca (gravado em `metadata` do nó `history`, junto do
+que já existia -- `reasoning_chars`):
+- `prompt_tokens`, `completion_tokens`, `cached_tokens`
+- `predicted_per_second`, `prompt_per_second` (velocidade real de geração)
+- `used_codegraph_tools`: lista de nomes de tool do `codegraph-mcp` que
+  apareceram em `tool_calls` daquela resposta (comparado contra
+  `CODEGRAPH_TOOL_NAMES` -- filtra tool calls de outros MCP servers que
+  o usuário tenha configurado, se houver).
+
+Tool calls em streaming vêm parciais por índice (`delta.tool_calls`) --
+só o nome da função é usado aqui (não precisa reconstruir os argumentos
+completos pra saber *se* uma tool foi chamada).
+
+### 10.2 O que é estimado, e por quê é rotulado assim
+
+"Tokens poupados" (`metrics.effectiveness_summary`) **não é rastreado
+byte a byte** -- isso exigiria acompanhar o conteúdo exato de cada
+resultado de tool call através de múltiplas requisições (o histórico da
+conversa cresce a cada turno, reconstruir "o que exatamente entrou nesse
+prompt por causa de uma tool" é bem mais caro de implementar certo).
+
+Em vez disso: `(tamanho médio de um arquivo inteiro indexado -
+tamanho médio de um chunk `file_context` devolvido) × número de trocas
+que usaram alguma tool`, convertido de caracteres pra tokens numa razão
+grosseira (~4 chars/token). É uma estimativa de ordem de grandeza, não
+uma medição -- o dashboard deixa isso explícito no rodapé, não esconde.
+
+### 10.3 Cobertura de indexação (`coverage_stats`)
+
+Sinal indireto de efetividade: quanto do código indexado tem chunking
+"de verdade" (tree-sitter/markdown) vs. caiu no fallback de linha.
+Detectado sem estado extra -- um chunk de fallback sempre tem nome no
+formato `"linhas N-M"` (`_chunk_lines`, `indexer.py`); qualquer outro
+nome veio de chunking real. Medido de verdade no `ambiente_pessoal_llm`:
+44.2% (441/998) -- mostra que ainda tem bastante coisa (provavelmente
+JSON de dataset, `.txt`, etc.) sem gramática tree-sitter útil.
+
+### 10.4 A rota `/dashboard`
+
+`GET http://localhost:8081/dashboard` (aceita `?project=/caminho` pra
+ver outro projeto; default é o projeto ativo, `state.get_active_project()`).
+HTML gerado no servidor (nada de build step/framework front-end),
+gráficos via Chart.js (CDN -- página é só local/localhost, sem problema
+de CSP). Sem autenticação -- mesma superfície de exposição do resto do
+proxy (`127.0.0.1` only, ver seção 9.1).
+
+Testado de ponta a ponta contra dado real do `ambiente_pessoal_llm`:
+412 arquivos, 18 trocas de histórico (2 delas já com métricas completas
+-- as anteriores a essa feature aparecem como `null` nos gráficos, sem
+quebrar nada).
