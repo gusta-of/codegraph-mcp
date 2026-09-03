@@ -63,6 +63,11 @@ interromper a conversa. Tem um limite de espaço configurável -- quando
 enche, as conversas mais antigas vão sendo apagadas primeiro (as mais
 recentes ficam).
 
+**Importante**: atualizar o Mapa do Código (peça 1) **nunca apaga** essa
+memória de conversas -- são duas coisas guardadas separadas. Rodar o
+"atalho de atualizar" (`.codegraph/reindex.sh`) mexe só no mapa, o
+histórico de conversas continua do jeito que estava.
+
 ### 4. A Ponte (o que faz a memória de conversas funcionar)
 
 **O que é**: um "meio de campo" que fica entre o Agente e o modelo de

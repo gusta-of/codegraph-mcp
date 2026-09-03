@@ -76,6 +76,11 @@ preenchido. Depois da primeira vez, pra atualizar o grafo (fui criando
 arquivo novo, por exemplo), não preciso mais lembrar o comando completo:
 só rodo esse arquivo.
 
+⚠️ **Reindexar só atualiza o mapa do código -- o histórico de conversas
+fica intacto**, sempre (confirmado no código, `ARQUITETURA.md` seção
+2.5). Só sai por expurgo de tamanho (seção "Histórico de prompts" acima)
+ou se eu apagar o `.db` inteiro na mão.
+
 Depois: **abrir uma sessão nova do Kimi Code** dentro do projeto (sessão
 já aberta antes não pega o `mcp.json` sozinha) e rodar `/mcp` pra
 confirmar a conexão.

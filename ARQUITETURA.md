@@ -151,6 +151,26 @@ terminal (`./reindex.sh`) ou clicando (dependendo do gerenciador de
 arquivos/config do SO). Testado de verdade: gerado, rodado direto por
 caminho absoluto de outra pasta, reindexou igual ao comando original.
 
+**Garantia importante, confirmada no código (não só observada) -- o
+`reindex.sh`/`codegraph setup` nunca apaga histórico de conversas.** Só
+mexe em nós `file`/`file_context` (via `indexer.index_project`) e
+`flow`/`flow_step` (via `flows.load_flows_dir`) -- os únicos `DELETE` no
+caminho de reindexação são `db.delete_children` chamado com o id de um
+nó `file` ou `flow`, que recria só os filhos daquele nó específico. Nós
+`history` **não têm pai** (`parent_id` sempre `NULL`, ver seção 3) --
+estruturalmente impossível esse `DELETE` alcançar eles, não é regra
+condicional que possa falhar. A única função que apaga `history` é
+`history.enforce_limit` (seção 9.4), chamada só de dentro de
+`history.record_exchange` -- ou seja, só quando uma conversa **nova**
+é gravada pelo proxy, nunca durante indexação. `reindex.sh`/`codegraph
+setup` sempre abrem o `.codegraph/graph.db` **já existente** e
+atualizam em cima dele -- histórico dentro continua intacto. Isso não
+vale se você apagar o arquivo `.db` manualmente antes (como fizemos de
+propósito em alguns testes desta sessão, pra ver o efeito de uma
+mudança de chunking em tudo, seção 4.1) -- aí o banco inteiro some,
+histórico incluso; a garantia é sobre o fluxo normal de reindexar, não
+sobre recriar o banco do zero.
+
 Rodar de novo (`codegraph setup` de novo, ou o próprio `reindex.sh`)
 sobrescreve o launcher -- inofensivo, o conteúdo é sempre recalculado
 igual a partir do mesmo projeto.
