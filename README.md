@@ -70,6 +70,12 @@ já existirem, e escreve/atualiza `.kimi-code/mcp.json` dentro do projeto
 novo sempre que o projeto mudar -- é idempotente (arquivo sem mudança de
 hash é pulado, `mcp.json` é atualizado no lugar, não duplicado).
 
+Ele também deixa um atalho pronto dentro do próprio projeto --
+`.codegraph/reindex.sh` (ou `.bat` no Windows) -- já com o caminho certo
+preenchido. Depois da primeira vez, pra atualizar o grafo (fui criando
+arquivo novo, por exemplo), não preciso mais lembrar o comando completo:
+só rodo esse arquivo.
+
 Depois: **abrir uma sessão nova do Kimi Code** dentro do projeto (sessão
 já aberta antes não pega o `mcp.json` sozinha) e rodar `/mcp` pra
 confirmar a conexão.

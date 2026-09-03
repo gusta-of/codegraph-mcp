@@ -133,6 +133,28 @@ diferencia "qual projeto" é a env var `CODEGRAPH_DB`, não o `cwd`.
 Exemplo real já configurado: `~/workspace/ambiente_pessoal_llm/.kimi-code/mcp.json`
 aponta pro `.codegraph/graph.db` daquele projeto.
 
+### 2.5 O botão de "atualizar" (`.codegraph/reindex.sh`/`.bat`)
+
+`codegraph setup` (via `cmd_setup`, `cli.py`) termina gerando um arquivo
+executável **dentro do próprio projeto** (`.codegraph/reindex.sh` no
+Linux/macOS, `.codegraph/reindex.bat` no Windows -- só o formato do SO
+onde `setup` rodou, não os dois) com o comando de reindexação **já
+preenchido** (caminho do projeto, caminho do Python do `codegraph-mcp`
+-- via `sys.executable`, mesma lógica do `mcp.json`). Motivação: você não
+deveria precisar lembrar o comando completo (`codegraph setup
+/caminho/enorme/do/projeto`) toda vez que só quer atualizar o grafo
+depois de criar/mudar arquivos -- só roda esse arquivo.
+
+`.sh` sai com permissão de execução já aplicada
+(`path.chmod(... | S_IXUSR | S_IXGRP | S_IXOTH)`) -- funciona direto no
+terminal (`./reindex.sh`) ou clicando (dependendo do gerenciador de
+arquivos/config do SO). Testado de verdade: gerado, rodado direto por
+caminho absoluto de outra pasta, reindexou igual ao comando original.
+
+Rodar de novo (`codegraph setup` de novo, ou o próprio `reindex.sh`)
+sobrescreve o launcher -- inofensivo, o conteúdo é sempre recalculado
+igual a partir do mesmo projeto.
+
 ## 3. O modelo de dados (schema.sql)
 
 Tudo mora em duas tabelas + um índice de busca, num único arquivo

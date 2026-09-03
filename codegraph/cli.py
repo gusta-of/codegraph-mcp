@@ -13,6 +13,8 @@ macOS, ou Windows com Git Bash/WSL).
 
 import argparse
 import json
+import os
+import stat
 import sys
 from pathlib import Path
 
@@ -69,6 +71,37 @@ def _write_mcp_json(project_dir: Path, codegraph_dir: Path, db_path: Path) -> Pa
     return mcp_json_path
 
 
+def _write_reindex_launcher(project_dir: Path, codegraph_dir: Path) -> Path:
+    """Cria, dentro de .codegraph/, um arquivo executável direto pelo SO
+    (sem precisar lembrar comando/caminho) que reindexa ESTE projeto de
+    novo -- pra rodar toda vez que criar/mudar arquivos e quiser atualizar
+    o grafo. Gera o formato certo pro SO atual (`.sh` em Linux/macOS,
+    `.bat` no Windows) -- só um dos dois, o da máquina onde `setup` rodou."""
+    codegraph_subdir = project_dir / ".codegraph"
+    codegraph_subdir.mkdir(parents=True, exist_ok=True)
+
+    if os.name == "nt":
+        path = codegraph_subdir / "reindex.bat"
+        path.write_text(
+            "@echo off\r\n"
+            "REM Gerado por `codegraph setup` -- reindexar este projeto de novo.\r\n"
+            "REM Roda toda vez que criar/mudar arquivos e quiser atualizar o grafo.\r\n"
+            f'"{sys.executable}" -m codegraph.cli setup "{project_dir}"\r\n'
+            "pause\r\n"
+        )
+        return path
+
+    path = codegraph_subdir / "reindex.sh"
+    path.write_text(
+        "#!/bin/bash\n"
+        "# Gerado por `codegraph setup` -- reindexar este projeto de novo.\n"
+        "# Roda toda vez que criar/mudar arquivos e quiser atualizar o grafo.\n"
+        f'"{sys.executable}" -m codegraph.cli setup "{project_dir}"\n'
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+
 def cmd_setup(args):
     codegraph_dir = Path(__file__).resolve().parent.parent
     project_dir = Path(args.project).resolve()
@@ -100,12 +133,16 @@ def cmd_setup(args):
     state.set_active_project(project_dir)
     print(f"==> {project_dir} marcado como projeto ativo (recebe o histórico de prompts agora)")
 
+    launcher_path = _write_reindex_launcher(project_dir, codegraph_dir)
+    print(f"==> criado {launcher_path} -- roda ele (clique duplo, ou no terminal) toda vez que quiser reindexar esse projeto de novo")
+
     print()
     print("pronto. próximos passos:")
     print(f"  1. abrir uma sessão NOVA do Kimi Code dentro de {project_dir}")
     print("     (sessão já aberta antes deste comando não pega o mcp.json sozinha)")
     print("  2. dentro do Kimi Code, rodar /mcp pra confirmar a conexão")
     print("  3. servidor de modelo + proxy precisam estar rodando -- ver INSTALL.md")
+    print(f"  4. daqui pra frente, pra atualizar o grafo, roda {launcher_path.name} -- não precisa lembrar o comando completo de novo")
 
 
 def main():
