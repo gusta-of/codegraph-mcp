@@ -576,3 +576,47 @@ Testado de ponta a ponta contra dado real do `ambiente_pessoal_llm`:
 412 arquivos, 18 trocas de histórico (2 delas já com métricas completas
 -- as anteriores a essa feature aparecem como `null` nos gráficos, sem
 quebrar nada).
+
+### 10.5 Como ler os 7 cards do dashboard
+
+| Card | O que significa |
+|---|---|
+| `arquivos indexados` | Quantos arquivos do projeto estão no grafo (`coverage_stats`, `type='file'`). |
+| `contextos com chunking inteligente` | Dos nós `file_context`, quantos vieram de análise real (tree-sitter/markdown) vs. caíram no fallback burro de linha (`_is_smart_chunk` -- ver seção 10.3). |
+| `fluxos mapeados` | Quantos `flows/*.yaml` foram carregados (`type='flow'`). Zero aqui significa `get_flow` não tem nada pra devolver ainda -- é manual, não é gerado sozinho (seção 5). |
+| `trocas de prompt registradas` | `COUNT` de nós `type='history'` -- cada ida-e-volta real capturada pelo proxy. |
+| `trocas que usaram tool do codegraph-mcp` | % das trocas acima em que `used_codegraph_tools` (seção 10.1) não veio vazio. |
+| `tokens/s médio de geração` | Média de `predicted_per_second`, real, direto do `llama-server`. |
+| `tokens poupados (estimativa)` | Ver 10.2 -- e a próxima seção, porque esse número **depende diretamente** do card anterior. |
+
+### 10.6 Por que "tokens poupados" fica em zero (achado real, 2026-09-03)
+
+A fórmula (seção 10.2) multiplica a diferença de tamanho por
+`len(with_tools)` -- **quantas trocas usaram alguma tool**. Testando
+contra uso real do `ambiente_pessoal_llm` (20 trocas registradas), esse
+número ficou em **0.0%** -- ou seja, o modelo nunca chamou
+`search`/`get_flow`/`get_file_tree`/etc nessas 20 trocas, então a conta
+zera inteira, não importa quão boa seja a cobertura de indexação.
+
+Duas causas identificadas, não é bug:
+
+1. **O Kimi Code tem tool de leitura de arquivo própria** (nativa dele) --
+   nada hoje diz pro modelo "prefira as tools do `codegraph-mcp`" em vez
+   da tool nativa. Sem motivo claro pra preferir, ele usa o que já
+   conhece.
+2. **Zero fluxos mapeados** nesse projeto -- o cenário onde a ferramenta
+   mais se destaca (`get_flow` devolvendo trecho já resolvido) não existe
+   ainda pra ele escolher.
+
+Duas formas de forçar um resultado real (não é preciso mudar código
+nenhum, é uso):
+- Pedir explícito no prompt: *"usa a tool `search` do codegraph pra
+  achar X"* -- força a chamada, o card muda na próxima carregada da
+  página.
+- Mapear um fluxo de verdade (`.codegraph/flows/*.yaml`) pra algo que o
+  usuário vá perguntar -- aumenta a chance do modelo escolher `get_flow`
+  sozinho, sem precisar pedir explícito.
+
+Sem um desses dois empurrões, `with_tools_pct` tende a ficar em zero
+indefinidamente -- a ferramenta existir não é suficiente pra ela ser
+usada; é sinal real de adoção, não estimativa nem bug de instrumentação.

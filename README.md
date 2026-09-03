@@ -246,6 +246,14 @@ rotulada como tal no rodapé da página**, não finjo que é medição exata
 token/velocidade são reais, direto do `llama-server` (`usage`/`timings`
 da API) -- isso sim é medição, não estimativa.
 
+⚠️ **Testei contra uso real e "tokens poupados" ficou em 0** -- não é
+bug: significa que o modelo usou 0% das minhas tools nas trocas
+registradas (ele tem tool de leitura de arquivo nativa do Kimi Code e
+usa ela por padrão; sem fluxo mapeado, também não tem muito motivo pra
+preferir `get_flow`). Pra ver um número real: pedir explícito no prompt
+pra usar `search`/`get_flow`, ou mapear um fluxo de verdade primeiro.
+Causa completa e o porquê na `ARQUITETURA.md`, seção 10.6.
+
 `?project=/caminho/de/outro/projeto` na URL pra ver o dashboard de um
 projeto que não é o ativo no momento.
 
