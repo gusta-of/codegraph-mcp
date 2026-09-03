@@ -43,6 +43,8 @@ pyyaml>=6.0      # parse dos arquivos flows/*.yaml
 httpx>=0.27      # cliente HTTP async -- o proxy usa pra falar com o llama-server
 starlette>=0.37  # framework ASGI minimo -- roteamento do proxy
 uvicorn>=0.30    # servidor ASGI que roda o proxy
+tree-sitter>=0.23              # binding Python do tree-sitter
+tree-sitter-language-pack>=0.2 # gramaticas prontas (dezenas de linguagens) + deteccao de linguagem por path
 ```
 
 Nota de versão: o SDK `mcp` fez uma mudança de API entre a v1 e a v2 --
@@ -149,17 +151,17 @@ Pipeline, arquivo por arquivo, disparado por
    (`db.delete_children`) antes de recriar -- evita duplicar contexto
    obsoleto.
 5. **Chunking** (`_chunk_file`), escolhido pela extensão:
-   - **`.py`**: `_chunk_python` usa o módulo `ast` da própria stdlib.
-     Percorre `tree.body` (só o nível top-level do módulo) e cria um
-     chunk por `FunctionDef`/`AsyncFunctionDef`/`ClassDef` -- nome do
-     chunk = nome da função/classe, linhas = `node.lineno` até
-     `node.end_lineno`. Se o parse falhar (erro de sintaxe) ou não achar
-     nenhum def/class no nível top, cai pro fallback de linhas.
    - **`.md`/`.markdown`**: `_chunk_markdown` acha todas as linhas que
      batem com `^#{1,6}\s+`, e cada seção vai do header até o próximo
      header (ou fim do arquivo). Nome do chunk = texto do header.
-   - **qualquer outro tipo**: `_chunk_lines`, blocos fixos de
-     `LINE_CHUNK_SIZE` (150) linhas, nome tipo `"linhas 1-150"`.
+   - **`.html`/`.htm`**: `_chunk_html` (ver 4.1) -- extrai `<script>` e
+     chunka o JS de dentro.
+   - **qualquer outra extensão que `tree_sitter_language_pack.detect_language_from_path`
+     reconheça** (dezenas de linguagens, ver 4.1): `_chunk_treesitter`,
+     genérico, sem código por linguagem.
+   - **fallback** (extensão não reconhecida, ou o passo acima não achou
+     nenhum chunk): `_chunk_lines`, blocos fixos de `LINE_CHUNK_SIZE`
+     (150) linhas, nome tipo `"linhas 1-150"`.
 6. **Nós `file_context`**: um `db.upsert_node(type="file_context", ...)`
    por chunk, com `parent_id` = id do nó `file`, `content` = texto do
    chunk, `start_line`/`end_line` do trecho original.
@@ -168,12 +170,66 @@ Resultado real (indexação do `ambiente_pessoal_llm` em 2026-09-03): 412
 arquivos, 953 contextos, 2 pulados (binário/grande), rodando em poucos
 segundos.
 
-### Limitação conhecida
+### 4.1 Chunking genérico por linguagem (tree-sitter) -- 2026-09-03
 
-Só Python e Markdown têm chunking "inteligente" por enquanto. Qualquer
-outra linguagem (JS/TS, Go, etc.) cai no fallback de blocos de linha
-fixos -- funciona, mas não alinha com fronteiras de função/classe. Listado
-como próximo passo no README.
+Motivação real: um chat travou tentando diagnosticar 4 bugs interligados
+num `poker.html` de 917 linhas, e o `codegraph-mcp` não conseguia ajudar
+porque o chunking daquele arquivo era só blocos de linha fixos (`.html`
+não tinha chunking inteligente nenhum) -- não dava pra pedir "só a função
+de distribuir cartas". A pergunta que motivou essa seção: como generalizar
+isso sem escrever um parser por linguagem, já que o projeto pode trocar
+de stack a qualquer momento?
+
+**Mecanismo** (`_chunk_treesitter`, substituiu o `_chunk_python` baseado
+em `ast`): usa [tree-sitter](https://tree-sitter.github.io/) via o pacote
+`tree-sitter-language-pack`, que empacota gramáticas prontas pra dezenas
+de linguagens e resolve `extensão -> linguagem` sozinho
+(`detect_language_from_path`) -- zero mapa de extensão mantido à mão.
+
+O chunker em si é **uma função só, sem `if lang == "python": ... elif lang == "go": ...`**:
+
+1. Parseia o arquivo com a gramática certa.
+2. Pra cada nó de nível superior da árvore, procura um campo `name`
+   (`_find_name_node`) -- direto no nó, ou até 2 níveis abaixo (cobre o
+   caso comum de `const foo = () => {}`, onde o nome fica dentro de um
+   `variable_declarator` aninhado, não no nó de fora). A convenção de
+   campo `name` é comum a praticamente toda gramática tree-sitter --
+   é isso que generaliza sem código por linguagem.
+3. **Filtro estrutural** (não específico de linguagem): só vira chunk
+   quem tem corpo de mais de 1 linha. Sem isso, `import json` (Python)
+   ou `echo "..."` (Bash) também têm campo `name` na gramática e viram
+   ruído de chunk de 1 linha -- descoberto testando de verdade em
+   `db.py`/`setup-project.sh`/`schema.sql` (essas linguagens rodaram
+   através do mesmo `_chunk_treesitter`, sem tratamento especial).
+4. Nó sem `name` (import, statement solto) é ignorado -- não vira chunk,
+   igual o `ast` fazia antes só pra Python.
+
+**HTML** (`_chunk_html`) é o único caso com lógica própria, e por um
+motivo estrutural, não por ser "JS": a gramática HTML trata o conteúdo
+de `<script>` como texto bruto (`raw_text`), não como árvore JS -- não
+tem "language injection" automática nesse pacote. `_chunk_html` acha
+cada nó `script_element` > `raw_text`, roda `_chunk_treesitter` nesse
+texto com `lang="javascript"`, e desloca as linhas resultantes de volta
+pro arquivo original (`line_offset`). O mesmo `_chunk_treesitter`
+genérico é reaproveitado -- só a extração do texto é HTML-específica.
+
+**Testado de verdade**: JS/Go/Rust (sintéticos, confirmando que
+`function`, `const x = () => {}`, `type X struct{}`, `fn`/`struct` do
+Rust são todos capturados pela mesma função); HTML com `<script>`
+embutido (funções + `const` arrow function + classe, linhas corretas
+depois do deslocamento); regressão em Python (`db.py`, 14 chunks, uma
+função por chunk, igual ou melhor que o `ast` antigo); SQL (`schema.sql`,
+pega `CREATE TABLE`/`CREATE TRIGGER` -- imperfeito, alguns triggers
+subsequentes no mesmo arquivo não foram capturados, não investigado a
+fundo); Bash (`setup-project.sh`, pega os blocos de heredoc Python
+embutidos como chunks, ruído de comando solto filtrado).
+
+**Limitação conhecida**: `content_hash` só rastreia mudança de
+*conteúdo* do arquivo, não mudança no *algoritmo* de chunking -- trocar
+a lógica de chunking (como aconteceu aqui) não re-processa arquivos que
+não mudaram desde a última indexação. Pra ver o efeito de uma mudança de
+chunker em tudo que já tá indexado, precisa apagar o `.codegraph/graph.db`
+e reindexar do zero (testado, funciona, só não é automático).
 
 ## 5. Como os nós de fluxo são gerados (flows.py)
 

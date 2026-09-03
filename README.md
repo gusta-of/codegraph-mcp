@@ -13,9 +13,11 @@ documentado em detalhe no [ARQUITETURA.md](ARQUITETURA.md).
 Dois tipos de árvore, mais referências cruzadas entre elas:
 
 - **`file` -> `file_context`**: cada arquivo indexado vira um nó `file`;
-  cada arquivo é quebrado em pedaços (funções/classes pra `.py`, seções
-  pra `.md`, blocos de linha pro resto) -- cada pedaço é um nó
-  `file_context` filho.
+  cada arquivo é quebrado em pedaços (funções/classes/structs/etc pra
+  qualquer linguagem com gramática tree-sitter -- Python, JS/TS, Go,
+  Rust, Java, e dezenas de outras, sem eu precisar escrever código por
+  linguagem; seções pra `.md`; blocos de linha pro resto) -- cada
+  pedaço é um nó `file_context` filho.
 - **`flow` -> `flow_step`**: fluxos de lógica do sistema, que eu defino à
   mão em YAML (ver `flows/example.yaml`). Cada `flow_step` pode referenciar
   um ou mais `file_context`/`file` que o implementam -- essas referências
@@ -187,26 +189,57 @@ verdade: inseri ~5 MB de histórico, forcei um teto apertado, e o arquivo
 | `get_flow(name)` | Fluxo completo: passos em ordem, cada um já resolvido com o código que o implementa |
 | `list_history(limit)` | Entradas de prompt+resposta mais recentes deste projeto, mais nova primeiro |
 
+## Chunking por linguagem (tree-sitter)
+
+Motivo real de existir: um bug real (`poker.html`, 917 linhas, 4
+problemas interligados) travou uma sessão do Kimi Code num loop de
+raciocínio, e o `codegraph-mcp` não conseguia ajudar porque `.html`
+só tinha chunking de blocos de linha fixos -- não dava pra pedir "só a
+função de distribuir cartas".
+
+Resolvido com [tree-sitter](https://tree-sitter.github.io/) -- **uma
+função de chunking só, sem código por linguagem** (nada de
+`if lang == "javascript": ...`). Funciona hoje pra Python, JS/TS, Go,
+Rust, Java, Ruby, C/C++, SQL, Bash e dezenas de outras (o pacote
+`tree-sitter-language-pack` resolve `extensão -> linguagem` sozinho) --
+se eu trocar de stack amanhã, não preciso mexer nesse código, só
+funciona (com uma ressalva: reindexar do zero, ver abaixo).
+
+HTML é o único caso com tratamento próprio, e não por ser "JS": a
+gramática HTML não entende o conteúdo de `<script>` como código, só
+como texto bruto -- extraio esse texto e mando pro mesmo chunker
+genérico com `lang="javascript"`. Detalhe técnico completo (o algoritmo
+do "acha o nome", o filtro que tira ruído de `import`/`echo`) no
+`ARQUITETURA.md` seção 4.1.
+
+⚠️ **`content_hash` só rastreia mudança de conteúdo, não de algoritmo de
+chunking** -- trocar a lógica de chunking (como fiz aqui) não
+re-processa arquivos que já estavam indexados e não mudaram. Rodei
+`rm .codegraph/graph.db` + `setup-project.sh` de novo pra ver o efeito
+em tudo -- é o jeito de sempre que eu mudar como o chunking funciona.
+
 ## Status
 
-Testado de ponta a ponta: indexação (16 arquivos, 82 contextos, nesta
-sessão indexando o próprio repo), fluxos (`flows/example.yaml`, 3 passos
-resolvidos), e agora o histórico de prompts -- proxy rodando de verdade,
-passthrough validado (`/health`, `/v1/models`, chat com streaming), e
-prompt+resposta gravados e recuperáveis via `list_history`. Ainda não
-testei uma sessão inteira do Kimi Code (interativa, não só `curl`) usando
-o proxy do início ao fim.
+Testado de ponta a ponta: indexação com chunking genérico (regressão
+confirmada em Python, mais SQL/Bash/HTML+JS testados), fluxos
+(`flows/example.yaml`, 3 passos resolvidos, sobreviveu à troca de
+chunker), e histórico de prompts -- proxy rodando de verdade, passthrough
+validado (`/health`, `/v1/models`, chat com streaming), e prompt+resposta
+gravados e recuperáveis via `list_history`. Ainda não testei uma sessão
+inteira do Kimi Code (interativa, não só `curl`) usando o proxy do início
+ao fim.
 
 Próximos passos que pretendo fazer (ainda não implementados):
 - Comando pra "re-sincronizar" fluxos quando os arquivos referenciados
   mudam de linha (hoje `refs` casa por `symbol` = nome, então sobrevive a
   mudança de linha; mas se eu renomear a função, a referência quebra
   silenciosamente até eu rodar `load-flows` de novo).
-- Chunking mais esperto pra linguagens além de Python (hoje só Python e
-  Markdown têm chunk "inteligente"; o resto cai em blocos de linha fixos).
 - Extração assistida por LLM dos `flows/*.yaml` a partir do código, em
-  vez de escrever à mão.
+  vez de escrever à mão -- é o próximo passo real pro `poker.html`: agora
+  que o chunking de JS funciona, mapear os 4 bugs como flows separados.
 - Comando pra trocar de "projeto ativo" (histórico) sem precisar
   re-rodar `setup-project.sh` inteiro (hoje dá pra fazer chamando
   `state.set_active_project()` direto em Python, mas não tem CLI pra isso
   ainda).
+- Re-chunking automático quando o algoritmo de chunking muda (hoje é
+  manual: apagar o `.db` e reindexar do zero).

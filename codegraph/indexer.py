@@ -1,13 +1,15 @@
 """Parte 1: varre um projeto, um arquivo por nó (`file`), cada arquivo
-quebrado em pedaços -- nós `file_context` filhos (funções/classes pra
-Python, seções pra Markdown, blocos de linhas pro resto).
+quebrado em pedaços -- nós `file_context` filhos (funções/classes/etc
+pra qualquer linguagem com gramática tree-sitter, seções pra Markdown,
+blocos de linhas pro resto).
 """
 
-import ast
 import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+import tree_sitter_language_pack as tslp
 
 from codegraph import db
 
@@ -31,26 +33,92 @@ def _hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _chunk_python(source: str) -> list[Chunk]:
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return _chunk_lines(source)
+def _find_name_node(node, max_depth: int = 2):
+    """Acha o identificador "nome" de uma declaração top-level, direto ou
+    aninhado (ex: `const foo = () => {}` em JS -- o nome fica dentro de
+    `variable_declarator`, não no nó de fora). Convenção `name` como campo
+    é comum a praticamente toda gramática tree-sitter -- é isso que torna
+    esse chunker genérico por linguagem, sem código específico por
+    linguagem: funciona pra qualquer gramática que siga essa convenção,
+    sem eu precisar listar tipos de nó um por um."""
+    if max_depth < 0:
+        return None
+    found = node.child_by_field_name("name")
+    if found is not None:
+        return found
+    for child in node.children:
+        found = _find_name_node(child, max_depth - 1)
+        if found is not None:
+            return found
+    return None
 
-    lines = source.splitlines()
+
+def _chunk_treesitter(source: str, lang: str, line_offset: int = 0) -> list[Chunk]:
+    """Chunk genérico via tree-sitter: pega os nós de nível superior que
+    têm um identificador "name" (função, classe, struct, const com nome,
+    etc, dependendo da linguagem) -- pula import/statements soltos, que
+    não têm. `line_offset` desloca os números de linha (usado pra script
+    embutido dentro de HTML, onde o parser só vê o conteúdo do <script>,
+    não o arquivo inteiro)."""
+    try:
+        parser = tslp.get_parser(lang)
+    except Exception:
+        return []
+    src_bytes = source.encode("utf-8", errors="ignore")
+    try:
+        tree = parser.parse(src_bytes)
+    except Exception:
+        return []
+
     chunks: list[Chunk] = []
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            start = node.lineno
-            end = getattr(node, "end_lineno", start)
-            chunks.append(Chunk(
-                name=node.name,
-                content="\n".join(lines[start - 1:end]),
-                start_line=start,
-                end_line=end,
-            ))
-    if not chunks:
-        return _chunk_lines(source)
+    for node in tree.root_node.children:
+        # Filtro estrutural, sem nada específico de linguagem: só vira
+        # chunk quem tem corpo de verdade (mais de 1 linha). Sem isso,
+        # coisas como `import json` (Python) ou `echo "..."` (Bash)
+        # também têm campo "name" na gramática e viram ruído de 1 linha.
+        if node.end_point[0] <= node.start_point[0]:
+            continue
+        name_node = _find_name_node(node)
+        if name_node is None:
+            continue
+        name = src_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8", errors="ignore")
+        content = src_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")
+        chunks.append(Chunk(
+            name=name, content=content,
+            start_line=node.start_point[0] + 1 + line_offset,
+            end_line=node.end_point[0] + 1 + line_offset,
+        ))
+    return chunks
+
+
+def _chunk_html(source: str) -> list[Chunk]:
+    """HTML puro não entende o JS dentro de <script> como funções (fica
+    como texto bruto na árvore) -- extrai cada bloco <script> e re-parseia
+    o conteúdo como javascript, deslocando as linhas de volta pro arquivo
+    original."""
+    try:
+        parser = tslp.get_parser("html")
+    except Exception:
+        return []
+    src_bytes = source.encode("utf-8", errors="ignore")
+    tree = parser.parse(src_bytes)
+
+    chunks: list[Chunk] = []
+
+    def walk(node):
+        if node.type == "script_element":
+            for child in node.children:
+                if child.type == "raw_text":
+                    script_src = src_bytes[child.start_byte:child.end_byte].decode(
+                        "utf-8", errors="ignore"
+                    )
+                    chunks.extend(_chunk_treesitter(
+                        script_src, "javascript", line_offset=child.start_point[0]
+                    ))
+        for c in node.children:
+            walk(c)
+
+    walk(tree.root_node)
     return chunks
 
 
@@ -89,10 +157,18 @@ def _chunk_lines(source: str) -> list[Chunk]:
 
 
 def _chunk_file(path: Path, source: str) -> list[Chunk]:
-    if path.suffix == ".py":
-        return _chunk_python(source)
     if path.suffix in (".md", ".markdown"):
         return _chunk_markdown(source)
+
+    if path.suffix in (".html", ".htm"):
+        chunks = _chunk_html(source)
+        return chunks or _chunk_lines(source)
+
+    lang = tslp.detect_language_from_path(str(path))
+    if lang is not None:
+        chunks = _chunk_treesitter(source, lang)
+        if chunks:
+            return chunks
     return _chunk_lines(source)
 
 
