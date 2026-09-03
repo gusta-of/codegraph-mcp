@@ -37,6 +37,19 @@ CODEGRAPH_TOOL_NAMES = {
 }
 
 
+def _is_codegraph_tool(name: str) -> bool:
+    """Kimi Code (e provavelmente outros clientes MCP) prefixam o nome da
+    tool com o nome do servidor pra evitar colisão entre MCP servers
+    diferentes -- ex: "search" vira "mcp__codegraph__search". Bater só
+    contra CODEGRAPH_TOOL_NAMES (nome puro) nunca reconhece isso -- foi
+    um bug real, descoberto testando ao vivo (2026-09-03): a tool era
+    chamada de verdade mas o dashboard nunca contava, porque a checagem
+    de nome sempre falhava. "codegraph" no nome (nosso servidor MCPServer
+    se chama exatamente isso, ver server.py) é o sinal robusto,
+    independente de qual convenção de prefixo o cliente usar."""
+    return "codegraph" in name.lower() or name in CODEGRAPH_TOOL_NAMES
+
+
 def _last_user_message(messages: list) -> str:
     for m in reversed(messages):
         if m.get("role") != "user":
@@ -123,7 +136,7 @@ async def chat_completions(request: Request):
             reasoning = msg.get("reasoning_content") or ""
             used_tools = {
                 tc["function"]["name"] for tc in (msg.get("tool_calls") or [])
-                if tc.get("function", {}).get("name") in CODEGRAPH_TOOL_NAMES
+                if _is_codegraph_tool(tc.get("function", {}).get("name") or "")
             }
             usage = data.get("usage")
         except (KeyError, IndexError, ValueError):
@@ -177,7 +190,7 @@ async def chat_completions(request: Request):
                     if r:
                         reasoning_parts.append(r)
                     for name in tools:
-                        if name in CODEGRAPH_TOOL_NAMES:
+                        if _is_codegraph_tool(name):
                             used_tools.add(name)
         await upstream_resp.aclose()
         asyncio.create_task(_log_exchange(

@@ -621,4 +621,41 @@ nenhum, é uso):
 
 Sem um desses dois empurrões, `with_tools_pct` tende a ficar em zero
 indefinidamente -- a ferramenta existir não é suficiente pra ela ser
-usada; é sinal real de adoção, não estimativa nem bug de instrumentação.
+usada; é sinal real de adoção. **Ressalva** (ver 10.7): isso só é
+confiável depois do fix do bug de detecção -- antes dele, dava zero
+mesmo quando a tool *era* usada de verdade.
+
+### 10.7 Bug real: detecção de tool nunca batia (achado e corrigido, 2026-09-03)
+
+Testando os dois prompts sugeridos (10.6) contra uma sessão real do Kimi
+Code: o segundo prompt (forçando `search` explícito) **realmente chamou
+a tool** -- visível na UI do Kimi Code ("Used search · MCP/codegraph",
+"Approve mcp__codegraph__search"). Mesmo assim, o dashboard continuou
+em 0.0%.
+
+Causa: o Kimi Code prefixa o nome de cada tool MCP com o nome do
+servidor, pra evitar colisão entre servidores diferentes que
+exponham uma tool de mesmo nome -- `search` chega no modelo (e volta
+no `tool_calls`) como `mcp__codegraph__search`, não como `search`. A
+checagem original (`name in CODEGRAPH_TOOL_NAMES`, comparação exata
+contra os nomes puros das tools) nunca batia com esse formato --
+`used_codegraph_tools` ficava sempre vazio, silenciosamente, mesmo com
+a tool sendo chamada de verdade.
+
+Confirmado direto no banco: a entrada de histórico do prompt "usa a
+tool search do codegraph..." não tinha `used_codegraph_tools` na
+`metadata`, apesar da tool ter rodado (visível na UI).
+
+**Fix** (`_is_codegraph_tool`, `proxy.py`): em vez de comparar o nome
+inteiro, checa se `"codegraph"` aparece em qualquer lugar do nome
+(case-insensitive) -- como o servidor MCP se chama exatamente
+`"codegraph"` (`MCPServer("codegraph")` em `server.py`), esse
+substring aparece não importa qual prefixo o cliente use, presente ou
+futuro. Mantém também o match exato contra `CODEGRAPH_TOOL_NAMES` como
+fallback, pra clientes que não prefixam nada.
+
+Efeito prático: **dados de "trocas que usaram tool" registrados antes
+desse fix (2026-09-03) estão subestimados** -- podem ter usado a tool
+de verdade e não terem sido contados. O dashboard não reprocessa
+histórico antigo automaticamente; só as trocas novas, depois do fix,
+contam certo.
