@@ -183,3 +183,4 @@ confirmar que conectou.
 - **Editou `.gguf`/mudou de modelo sem reiniciar**: `llama-server`
   precisa subir de novo (matar o processo, `codegraph-up` de novo) --
   ele não recarrega modelo sozinho.
+
