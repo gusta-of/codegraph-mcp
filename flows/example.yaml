@@ -1,0 +1,27 @@
+# Exemplo de fluxo -- apague/substitua pelos fluxos reais do seu projeto.
+# Cada `refs.path` deve ser um caminho relativo à raiz que você indexou
+# (ver `python -m codegraph.cli index <raiz>`), e `symbol` (opcional) deve
+# bater com o nome de uma função/classe (Python) ou seção (Markdown)
+# encontrada nesse arquivo -- sem `symbol`, o passo liga no arquivo inteiro.
+
+name: "exemplo_indexacao"
+description: >
+  Fluxo de exemplo: como o próprio codegraph-mcp indexa um projeto.
+  Serve só de referência de formato -- os `refs` abaixo apontam pro
+  código deste repositório.
+steps:
+  - name: "varrer_arquivos"
+    description: "Percorre a árvore de diretórios, ignorando .git/node_modules/etc."
+    refs:
+      - path: "codegraph/indexer.py"
+        symbol: "iter_project_files"
+  - name: "quebrar_em_contexto"
+    description: "Escolhe a estratégia de chunk pelo tipo de arquivo (Python/Markdown/genérico)."
+    refs:
+      - path: "codegraph/indexer.py"
+        symbol: "_chunk_file"
+  - name: "gravar_no_grafo"
+    description: "Insere nó `file` + nós `file_context` filhos no SQLite."
+    refs:
+      - path: "codegraph/indexer.py"
+        symbol: "index_project"
