@@ -74,41 +74,40 @@ def _write_mcp_json(project_dir: Path, codegraph_dir: Path, db_path: Path) -> Pa
 
 _AGENTS_MD_MARKER_START = "<!-- codegraph-mcp: início do bloco automático -->"
 _AGENTS_MD_MARKER_END = "<!-- codegraph-mcp: fim do bloco automático -->"
-_AGENTS_MD_BLOCK = f"""{_AGENTS_MD_MARKER_START}
-## Memória e índice do projeto (codegraph-mcp)
-
-Este projeto tem um índice estruturado do código (arquivos/trechos/fluxos)
-e um histórico de conversas anteriores, disponíveis nas tools
-`mcp__codegraph__*`. O servidor MCP existir não faz você usar essas tools
-sozinho -- prefira ativamente usá-las ANTES de recorrer a `Read`/`Grep`
-lendo o projeto inteiro:
-
-- Pra entender "como funciona X" ou achar onde algo está implementado,
-  tente `mcp__codegraph__search` primeiro (busca full-text em arquivos,
-  trechos E histórico de uma vez).
-- Se existir um fluxo documentado pra essa lógica, `mcp__codegraph__list_flows`
-  + `get_flow` já trazem o passo a passo ligado ao código real.
-- Antes de perguntar de novo algo que talvez já tenha sido decidido nesta
-  conversa, confira `mcp__codegraph__list_history` (mais recentes primeiro).
-- Só leia o arquivo inteiro com `Read` se o que essas tools devolverem não
-  for suficiente pra resolver a tarefa.
-{_AGENTS_MD_MARKER_END}
-"""
+# Minimizado de propósito (2026-09-05, pedido do usuário) -- esse bloco
+# entra no contexto de TODA mensagem, não só quando a tool é usada; a
+# versão longa anterior (~12 linhas com explicação) tinha custo fixo em
+# toda troca pra transmitir a mesma instrução que cabe numa frase. Ver
+# ECONOMIA_DE_TOKENS.md.
+_AGENTS_MD_BLOCK = (
+    f"{_AGENTS_MD_MARKER_START}\n"
+    "Antes de ler arquivo inteiro ou usar Grep no projeto todo, prefira "
+    "`mcp__codegraph__search`/`get_flow`/`list_history` -- consulte "
+    "primeiro, leia o arquivo só se não for suficiente.\n"
+    f"{_AGENTS_MD_MARKER_END}\n"
+)
 
 
 def _write_agents_md(project_dir: Path) -> Path:
-    """Adiciona (uma vez só, idempotente) um bloco em .kimi-code/AGENTS.md
-    orientando o agente a preferir as tools do codegraph em vez de ler
-    arquivo inteiro por padrão. Sem isso, a tool aparece disponível pro
-    agente (confirmado rodando `kimi -p "liste suas tools"`) mas ele nunca
-    escolhe chamá-la sozinho -- 0% de uso em dezenas de trocas reais,
-    achado real 2026-09-05, ver ARQUITETURA.md. Não mexe em nada que o
-    usuário já tenha escrito nesse arquivo -- só acrescenta o bloco, e não
-    duplica se `setup` rodar de novo."""
+    """Escreve/atualiza um bloco em .kimi-code/AGENTS.md orientando o
+    agente a preferir as tools do codegraph em vez de ler arquivo inteiro
+    por padrão. Sem isso, a tool aparece disponível pro agente (confirmado
+    rodando `kimi -p "liste suas tools"`) mas ele nunca escolhe chamá-la
+    sozinho -- 0% de uso em dezenas de trocas reais, achado real
+    2026-09-05, ver ARQUITETURA.md.
+
+    Idempotente igual `_write_mcp_json`: se o bloco já existe (marcadores
+    presentes), SUBSTITUI só o conteúdo entre eles -- não duplica, e runs
+    futuros de `setup` pegam mudança no template (ex: essa minimização)
+    sem precisar apagar o arquivo na mão. Nunca mexe em nada que o usuário
+    tenha escrito fora dos marcadores."""
     path = project_dir / ".kimi-code" / "AGENTS.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text() if path.exists() else ""
-    if _AGENTS_MD_MARKER_START in existing:
+    if _AGENTS_MD_MARKER_START in existing and _AGENTS_MD_MARKER_END in existing:
+        start = existing.index(_AGENTS_MD_MARKER_START)
+        end = existing.index(_AGENTS_MD_MARKER_END) + len(_AGENTS_MD_MARKER_END)
+        path.write_text(existing[:start] + _AGENTS_MD_BLOCK.rstrip("\n") + existing[end:])
         return path
     separator = "\n" if existing and not existing.endswith("\n") else ""
     path.write_text(existing + separator + ("\n" if existing else "") + _AGENTS_MD_BLOCK)

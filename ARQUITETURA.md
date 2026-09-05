@@ -1449,3 +1449,33 @@ de `dir:src` **e** os netos que vieram de `dir:src/poker` (que só
 existia por causa do primeiro) sumiram juntos; `idx:root` continuou
 aberto (não foi tocado); reabrir `dir:src` trouxe tudo de volta
 idêntico a antes.
+
+## 13. `AGENTS.md` minimizado + atualiza sozinho em vez de só pular (2026-09-05)
+
+Pedido do usuário: o bloco automático em `.kimi-code/AGENTS.md` (seção
+10.8) tinha ~12 linhas com explicação -- e esse bloco entra no contexto
+de **toda mensagem** da sessão, não só quando a tool é usada. É custo
+fixo repetido a cada troca pra transmitir uma instrução que cabe numa
+frase (mesmo raciocínio da seção "economia de tokens" -- ver
+`ECONOMIA_DE_TOKENS.md`).
+
+`_AGENTS_MD_BLOCK` (`cli.py`) virou uma frase só:
+> "Antes de ler arquivo inteiro ou usar Grep no projeto todo, prefira
+> `mcp__codegraph__search`/`get_flow`/`list_history` -- consulte
+> primeiro, leia o arquivo só se não for suficiente."
+
+Junto, `_write_agents_md()` mudou de comportamento: antes, se os
+marcadores já existiam no arquivo, só devolvia o caminho sem tocar em
+nada (bloco ficava congelado na versão de quando `setup` rodou pela
+primeira vez). Agora, se os marcadores existem, **substitui só o
+conteúdo entre eles** (mesmo espírito de `_write_mcp_json`, que já
+atualiza campos em vez de só pular) -- runs futuros de `codegraph setup`
+pegam mudança de template automaticamente, sem precisar apagar o
+arquivo na mão. Texto que o usuário tenha escrito antes/depois dos
+marcadores nunca é tocado.
+
+Testado: `royal_poker_online` tinha a versão longa (12 linhas) de antes
+-- rodar `codegraph setup` de novo trocou pra 1 linha, sem duplicar
+marcador (rodado 2x seguidas, continua 1 ocorrência). Testado também
+com conteúdo do usuário antes E depois do bloco (arquivo sintético) --
+ambos preservados intactos, só o meio trocou.

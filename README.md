@@ -74,12 +74,16 @@ já existirem, e escreve/atualiza `.kimi-code/mcp.json` dentro do projeto
 novo sempre que o projeto mudar -- é idempotente (arquivo sem mudança de
 hash é pulado, `mcp.json` é atualizado no lugar, não duplicado).
 
-Ele também acrescenta um bloco em `.kimi-code/AGENTS.md` instruindo o
-agente a preferir as tools do codegraph antes de ler arquivo inteiro ou
-usar `Grep` no projeto todo (também idempotente -- não escreve de novo
-se já existir, não apaga nada que eu tenha escrito nesse arquivo). Sem
-isso, ter o servidor MCP conectado não é suficiente -- confirmado de
-verdade: mesmo com as tools disponíveis, o agente simplesmente nunca
+Ele também acrescenta um bloco (uma frase só, de propósito -- ver
+`ECONOMIA_DE_TOKENS.md`, esse texto entra no contexto de toda mensagem)
+em `.kimi-code/AGENTS.md` instruindo o agente a preferir as tools do
+codegraph antes de ler arquivo inteiro ou usar `Grep` no projeto todo.
+Idempotente como o `mcp.json` -- roda de novo sempre que quiser, o
+conteúdo entre os marcadores é atualizado no lugar (pega mudança de
+template automaticamente), nunca duplica, e nunca mexe no que eu tenha
+escrito fora dos marcadores nesse arquivo. Sem isso, ter o servidor MCP
+conectado não é suficiente -- confirmado de verdade: mesmo com as tools
+disponíveis, o agente simplesmente nunca
 escolhia usá-las sozinho (0% de uso em dezenas de trocas reais) até esse
 bloco existir (detalhe completo no `ARQUITETURA.md`, seção 10.8).
 

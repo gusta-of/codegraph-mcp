@@ -103,6 +103,18 @@ mecanismo no indexador pra excluir arquivo do grafo sem tocar no código
 de verdade -- ver `ARQUITETURA.md` seção 4.2. Testado: busca por
 `bestHand` foi de 2 resultados (1 real + 1 duplicado) pra 1.
 
+### 7. Minimizar o `AGENTS.md` gerado -- ✅ feito
+
+O bloco automático do item 3 (`.kimi-code/AGENTS.md`) tinha ~12 linhas
+com explicação -- e diferente de uma tool result (que só entra no
+contexto quando chamada), esse texto entra no contexto de **toda
+mensagem** da sessão. Virou uma frase só, sem perder a instrução:
+"prefira `search`/`get_flow`/`list_history` a ler arquivo inteiro ou
+Grep, consulte primeiro". `codegraph setup` agora também **atualiza**
+esse bloco em runs futuros (antes só pulava se já existisse) -- rodar
+de novo já troca a versão antiga pela mínima, sem precisar apagar nada
+na mão. Detalhe técnico: `ARQUITETURA.md`, seção 13.
+
 ## Achado relacionado, não é bem "economia de token" mas apareceu testando
 
 `Poker.tsx` (o componente principal do jogo) virou **um chunk só de
