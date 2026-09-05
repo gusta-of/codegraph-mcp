@@ -1282,3 +1282,72 @@ verde/vermelho/cinza (`healthCard()`) conforme o campo é claramente bom,
 claramente ruim, ou só informativo -- testado ao vivo com
 `llama-server` + proxy no ar: os 6 cards vieram certos (modelo "ok",
 projeto ativo, banco existente com contagem, reindexação "ociosa").
+
+### 12.3 Bug real: uso de tool nunca era detectável, mesmo depois do AGENTS.md (2026-09-05)
+
+Usuário perguntou direto: "o codegraph está realmente sendo efetivo?".
+Investigando pra responder com dado, achei outro bug estrutural (terceiro
+nessa mesma frente, depois das seções 10.7 e 10.8) que fazia
+`used_codegraph_tools` nunca preencher, **mesmo com o `AGENTS.md` já
+funcionando e o modelo genuinamente chamando a tool**.
+
+Causa: `used_tools` é uma variável local de cada chamada a
+`chat_completions()` -- e cada rodada do loop de tool-calling é uma
+requisição HTTP separada (mesmo raciocínio da seção 11.9). A troca que
+efetivamente vira nó de histórico é a resposta **final** (`has_tool_call
+== False`, ver `_log_exchange`) -- e por definição, se ela não tem
+tool-call nela mesma, o `used_tools` *daquela requisição específica*
+está sempre vazio. A tool foi chamada de verdade numa rodada
+**anterior**, cujo `used_tools` nunca chegava a lugar nenhum -- a
+requisição que registra e a requisição que usou a tool nunca se falavam.
+
+Fix: `_pending_tool_usage: dict[str, set[str]]`, acumula por **pergunta**
+(`_last_user_message`, a mesma chave que já correlaciona rodadas do
+mesmo loop, ver seção 11.9) em vez de por requisição -- toda vez que uma
+requisição tem `used_tools` não-vazio, funde no dict acumulador; quando
+`_log_exchange` grava a troca final, faz `used_tools |
+_pending_tool_usage.pop(prompt, set())` antes de montar a metadata.
+
+**Verificado ponta a ponta, com sessão real do Kimi Code** (não só teste
+isolado de tool): pergunta "onde fica a lógica de calcular o vencedor de
+uma mão de poker?" sem nenhuma dica de usar tool -- o modelo narrou "Let
+me use the codegraph-mcp tools first, as the AGENTS.md guidance
+suggests", tentou `search` (voltou vazio numa query, ajustou), usou
+`get_file_tree` pra achar as funções de `engine.ts` com linhas, depois
+`get_node` pra puxar `bestHand`/`cmpScore` -- nunca leu o arquivo
+inteiro -- e respondeu certo (arquivo + função + linhas). O nó de
+histórico gerado (id 223) veio com `used_codegraph_tools:
+["get_file_tree", "get_node", "list_files", "list_flows", "search"]` --
+primeira vez, em toda a vida do projeto, que isso preencheu de verdade.
+
+### 12.4 Bug real: painel de conteúdo travava trocando entre nós já vistos (2026-09-05)
+
+Usuário reparou (com print da árvore de verdade em uso): clicando em
+vários nós de histórico em sequência, o painel de conteúdo às vezes
+parava de atualizar -- ficava mostrando o texto de um nó anterior mesmo
+depois de clicar em outro.
+
+Causa: `onNodeClick()` tinha um único guard no topo,
+`if (id === 'root' || expanded.has(id)) return;` -- `expanded` é o Set
+que marca "já busquei os filhos desse nó" (existe pra não duplicar
+filhos na árvore ao reclicar numa pasta/arquivo já aberto). Só que esse
+mesmo guard também bloqueava o clique inteiro, painel incluído, em
+QUALQUER nó já visitado antes -- reclicar num nó de histórico (ou
+arquivo) que já tinha sido aberto antes numa mesma sessão de navegação
+simplesmente não fazia nada, deixando o painel com o conteúdo do último
+nó que tinha conseguido passar pelo guard.
+
+Fix: `expanded` continua controlando só "não duplica filhos/relações na
+árvore", mas o `fetch` + `renderSidePanel()` do nó de conteúdo agora
+rodam **sempre**, incondicionalmente -- o `if (expanded.has(id)) return`
+que evita reprocessar filhos foi movido pra **depois** de já ter
+buscado e renderizado o painel, nunca antes. Mesmo ajuste aplicado nos
+outros dois lugares que usavam esse padrão (`dir:` e o balde de
+histórico) pra manter a intenção original neles (não há painel dinâmico
+de conteúdo ali pra travar, só o carregamento de filhos que não deve
+duplicar).
+
+Testado ponta a ponta: clicar no nó #232, depois no #222, depois de
+volta no #232 (o cenário exato reportado -- reclicar num nó já visitado)
+-- painel mostrou o título de #232 nas duas vezes, #222 no meio,
+nenhuma trava.

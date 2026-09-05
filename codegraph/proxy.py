@@ -36,6 +36,17 @@ client = httpx.AsyncClient(timeout=None)
 # a cada troca completa, ver ARQUITETURA.md).
 _reindex_locks: dict[str, asyncio.Lock] = {}
 
+# Acumula tool do codegraph usada em QUALQUER rodada intermediária do loop de
+# tool-calling, indexado pela pergunta real (_last_user_message) -- uma
+# pergunta gera várias requisições HTTP separadas (uma por rodada), cada uma
+# com seu próprio `used_tools` do zero. Sem acumular fora do request, a
+# métrica de uso nunca detectava nada: a resposta FINAL (a única que vira
+# nó de histórico -- ver has_tool_call em _log_exchange) por definição nunca
+# tem tool-call nela mesma, então o `used_tools` daquela requisição
+# específica sempre vinha vazio, mesmo quando uma rodada anterior tinha
+# chamado `search` de verdade (achado real, 2026-09-05, ver ARQUITETURA.md).
+_pending_tool_usage: dict[str, set[str]] = {}
+
 
 def _reindex_sync(project_root: Path, db_path: Path) -> None:
     conn = db.connect(str(db_path))
@@ -158,6 +169,11 @@ async def _log_exchange(
         # resposta final, sem tool-call pendente, conta como troca completa
         # (achado real, 2026-09-05, ver ARQUITETURA.md).
         return
+    # Junta com o que foi acumulado nas rodadas intermediárias dessa mesma
+    # pergunta (_pending_tool_usage) -- o `used_tools` desta chamada
+    # específica está vazio quase sempre (é a resposta final, sem tool-call
+    # nela mesma), quem tem o uso real são as rodadas anteriores.
+    used_tools = used_tools | _pending_tool_usage.pop(prompt, set())
     active = state.get_active_project()
     if active is None:
         return  # nenhum projeto marcado como ativo -- so' passa direto, sem log
@@ -216,6 +232,8 @@ async def chat_completions(request: Request):
             usage = data.get("usage")
         except (KeyError, IndexError, ValueError):
             pass
+        if used_tools and prompt:
+            _pending_tool_usage.setdefault(prompt, set()).update(used_tools)
         asyncio.create_task(_log_exchange(
             prompt, content, reasoning, usage, None, used_tools, has_tool_call,
         ))
@@ -274,6 +292,8 @@ async def chat_completions(request: Request):
                         if _is_codegraph_tool(name):
                             used_tools.add(name)
         await upstream_resp.aclose()
+        if used_tools and prompt:
+            _pending_tool_usage.setdefault(prompt, set()).update(used_tools)
         asyncio.create_task(_log_exchange(
             prompt, "".join(content_parts), "".join(reasoning_parts),
             usage_holder or None, timings_holder or None, used_tools, has_tool_call,
@@ -803,9 +823,10 @@ async function loadHistoryPage(parentId, beforeId) {{
 async function onNodeClick(params) {{
   if (!params.nodes.length) return;
   const id = params.nodes[0];
-  if (id === 'root' || expanded.has(id)) return;
+  if (id === 'root') return;
 
   if (typeof id === 'string' && id.startsWith('dir:')) {{
+    if (expanded.has(id)) return;  // pasta: filhos não mudam, nada novo pra buscar
     expanded.add(id);
     const fullPath = id.slice(4);
     const dirNode = findDirNode(fullPath);
@@ -832,6 +853,7 @@ async function onNodeClick(params) {{
   }}
 
   if (id === HISTORY_BUCKET_ID) {{
+    if (expanded.has(id)) return;  // primeira página já carregada, "atualizar árvore" recarrega tudo
     expanded.add(id);
     document.getElementById('side-panel').innerHTML =
       '<span class="badge" style="background:' + TYPE_STYLE.history.color + '">histórico</span><h3>Memórias de conversa</h3>'
@@ -848,10 +870,18 @@ async function onNodeClick(params) {{
     return;
   }}
 
+  // SEMPRE busca e atualiza o painel de conteúdo, mesmo pra nó já visitado
+  // antes -- bug real, 2026-09-05: `expanded` também bloqueava isso, então
+  // reclicar num nó (ex: histórico) já aberto antes deixava o painel
+  // travado mostrando o conteúdo do penúltimo nó clicado, nunca o do atual
+  // (usuário reparou trocando entre vários nós de histórico em sequência).
+  // `expanded` só deve controlar "já busquei filhos/relações" (evita
+  // duplicar na árvore), nunca o conteúdo do painel.
   const res = await fetch('/api/tree/node/' + id + PROJECT_Q);
   const data = await res.json();
   if (data.error) return;
   renderSidePanel(data.node);
+  if (expanded.has(id)) return;
   expanded.add(id);
 
   const newNodes = [];

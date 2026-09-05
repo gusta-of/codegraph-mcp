@@ -319,14 +319,20 @@ abas:
   `ARQUITETURA.md`, seção 12.2.
 
 ⚠️ **Testei contra uso real e "tokens poupados" ficou em 0"** num
-primeiro momento -- não era bug de contagem (isso também existiu e foi
-corrigido, ver seção 10.7), era o modelo simplesmente nunca escolhendo
-usar as tools sozinho, mesmo com o MCP conectado certo. Causa raiz: ter
-a tool disponível não basta, precisa de instrução explícita dizendo pra
-preferir ela -- por isso `codegraph setup` agora gera um
+primeiro momento -- três causas empilhadas, todas corrigidas: (1) bug de
+contagem que não reconhecia o prefixo `mcp__codegraph__` (seção 10.7);
+(2) o modelo simplesmente nunca escolhia usar as tools sozinho, mesmo
+com o MCP conectado certo -- ter a tool disponível não basta, precisa de
+instrução explícita, por isso `codegraph setup` agora gera um
 `.kimi-code/AGENTS.md` com essa orientação (seção "Registrar no Kimi
-Code" acima). Confirmado de verdade que muda o comportamento
-(`ARQUITETURA.md`, seção 10.8).
+Code" acima, `ARQUITETURA.md` seção 10.8); (3) mesmo com o modelo já
+chamando a tool de verdade, a métrica ainda não detectava -- cada rodada
+do loop de tool-calling é uma requisição separada, e a que vira memória
+nunca tem tool-call nela mesma (seção 12.3). Com as três corrigidas,
+testei ponta a ponta com uma pergunta real sem nenhuma dica ("onde fica
+a lógica de calcular o vencedor de uma mão de poker?") -- o modelo achou
+sozinho via `search`/`get_file_tree`/`get_node`, nunca leu o arquivo
+inteiro, e o dashboard registrou o uso de verdade pela primeira vez.
 
 `?project=/caminho/de/outro/projeto` na URL pra ver o dashboard de um
 projeto que não é o ativo no momento.
