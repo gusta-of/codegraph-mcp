@@ -121,6 +121,16 @@ def delete_children(conn: sqlite3.Connection, parent_id: int) -> None:
     conn.execute("DELETE FROM nodes WHERE parent_id=?", (parent_id,))
 
 
+def delete_node(conn: sqlite3.Connection, node_id: int) -> None:
+    """Apaga um nó, seus filhos diretos (ex: `file_context` de um `file`)
+    e as arestas que apontam de/pra ele -- usado quando um arquivo antes
+    indexado passa a bater num padrão de `.codegraphignore` (ver
+    indexer.py) e precisa sair do grafo, não só parar de ser atualizado."""
+    delete_children(conn, node_id)
+    conn.execute("DELETE FROM edges WHERE src_id=? OR dst_id=?", (node_id, node_id))
+    conn.execute("DELETE FROM nodes WHERE id=?", (node_id,))
+
+
 def get_node(conn: sqlite3.Connection, node_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM nodes WHERE id=?", (node_id,)).fetchone()
 

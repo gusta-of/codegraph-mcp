@@ -319,6 +319,46 @@ não mudaram desde a última indexação. Pra ver o efeito de uma mudança de
 chunker em tudo que já tá indexado, precisa apagar o `.codegraph/graph.db`
 e reindexar do zero (testado, funciona, só não é automático).
 
+### 4.2 `.codegraphignore` -- excluir arquivo do grafo sem tocar no disco (2026-09-05)
+
+Achado mapeando `royal_poker_online` de verdade: `src/poker.html` (versão
+pré-migração pra React, não importada em lugar nenhum -- confirmado via
+`grep` + `git log` mostrando 3h sem tocar contra 9min do `Poker.tsx`)
+tinha **48 contextos indexados** -- mais que qualquer arquivo em uso de
+verdade no projeto. Toda busca por lógica de jogo (`bestHand`, `score5`,
+etc) vinha duplicada: uma vez do código real, outra do código morto sob
+nomes ligeiramente diferentes. Isso é puro ruído -- não existia
+mecanismo pra excluir um arquivo específico do índice, só pastas
+inteiras (`IGNORE_DIRS`, hardcoded: `.git`, `node_modules`, etc).
+
+Fix: `.codegraphignore` opcional na raiz do projeto -- um padrão glob
+por linha, mesma convenção do `.gitignore` (`#` e linha vazia
+ignorados; padrão sem `/` casa só pelo nome em qualquer pasta, com `/`
+casa o caminho relativo inteiro). `indexer.load_ignore_patterns()` lê o
+arquivo; `indexer.is_ignored()` testa um caminho contra os padrões
+(`fnmatch`).
+
+Dois pontos onde isso entra:
+- `iter_project_files()` não visita mais arquivo que bate num padrão --
+  nunca mais vira nó novo.
+- **Arquivo que já estava indexado ANTES do padrão existir** não fica
+  órfão: no início de `index_project()`, antes do loop principal, varre
+  todo nó `type='file'` já no grafo e remove (`db.delete_node()` --
+  filhos + arestas + o nó em si) qualquer um cujo `path` bata num
+  padrão atual. Sem esse passo, adicionar uma linha no
+  `.codegraphignore` não teria efeito nenhum em arquivo já indexado
+  antes -- só passaria a valer pra indexação nova, deixando o lixo
+  antigo pra sempre no grafo.
+
+Nunca apaga o arquivo de verdade no disco -- só tira ele do grafo/busca.
+
+Testado de ponta a ponta: criado `.codegraphignore` com `src/poker.html`,
+rodado `codegraph setup` de novo -- log mostrou
+`[removido do índice, .codegraphignore] src/poker.html` e
+`1 removido(s) por .codegraphignore` no resumo. Busca por `bestHand`
+antes: 2 `file_context` (engine.ts real + poker.html duplicado). Depois:
+1 só.
+
 ## 5. Como os nós de fluxo são gerados (flows.py)
 
 Diferente dos arquivos, fluxos **não são descobertos automaticamente** --

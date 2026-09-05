@@ -30,6 +30,7 @@ def cmd_index(args):
         f"{stats['files_unchanged']} sem mudança, "
         f"{stats['files_skipped']} pulado(s) (binário/grande), "
         f"{stats['contexts_created']} contexto(s) criado(s)"
+        + (f", {stats['files_ignored_removed']} removido(s) por .codegraphignore" if stats['files_ignored_removed'] else "")
     )
 
 
@@ -157,6 +158,7 @@ def cmd_setup(args):
     print(
         f"    {stats['files_indexed']} indexado(s), {stats['files_unchanged']} sem mudança, "
         f"{stats['files_skipped']} pulado(s), {stats['contexts_created']} contexto(s) criado(s)"
+        + (f", {stats['files_ignored_removed']} removido(s) por .codegraphignore" if stats['files_ignored_removed'] else "")
     )
 
     flows_dir = project_dir / ".codegraph" / "flows"

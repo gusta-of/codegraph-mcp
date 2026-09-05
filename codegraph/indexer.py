@@ -4,6 +4,7 @@ pra qualquer linguagem com gramática tree-sitter, seções pra Markdown,
 blocos de linhas pro resto).
 """
 
+import fnmatch
 import hashlib
 import re
 from dataclasses import dataclass
@@ -19,6 +20,16 @@ IGNORE_DIRS = {
 }
 MAX_FILE_BYTES = 2 * 1024 * 1024  # 2 MB -- acima disso, só cria o nó `file`, sem quebrar em contexto
 LINE_CHUNK_SIZE = 150
+
+# Arquivo opcional na raiz do projeto, um padrão glob por linha (`#` e linha
+# vazia ignorados) -- mesmo espírito do .gitignore, mas só afeta o que entra
+# no grafo do codegraph, nunca o arquivo de verdade no disco. Existe pra
+# excluir código legado/duplicado que só suja busca e desperdiça espaço do
+# índice sem ajudar em nada (achado real, 2026-09-05: `poker.html` --
+# versão pré-migração pro React, não importada em lugar nenhum -- tinha
+# mais contextos indexados que qualquer arquivo em uso de verdade no
+# projeto, ver ARQUITETURA.md).
+IGNORE_FILENAME = ".codegraphignore"
 
 
 @dataclass
@@ -180,11 +191,37 @@ def _should_skip_dir(name: str) -> bool:
     )
 
 
-def iter_project_files(root: Path):
+def load_ignore_patterns(root: Path) -> list[str]:
+    path = root / IGNORE_FILENAME
+    if not path.exists():
+        return []
+    return [
+        line.strip() for line in path.read_text().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+def is_ignored(rel_path: str, patterns: list[str]) -> bool:
+    """Padrão com `/` casa contra o caminho relativo inteiro; sem `/`,
+    casa só contra o nome do arquivo (em qualquer pasta) -- mesma
+    convenção do .gitignore pros casos mais comuns."""
+    name = rel_path.rsplit("/", 1)[-1]
+    for pat in patterns:
+        target = rel_path if "/" in pat else name
+        if fnmatch.fnmatch(target, pat):
+            return True
+    return False
+
+
+def iter_project_files(root: Path, patterns: list[str] | None = None):
+    patterns = patterns if patterns is not None else load_ignore_patterns(root)
     for path in sorted(root.rglob("*")):
         if path.is_dir():
             continue
+        rel_path = str(path.relative_to(root))
         if any(_should_skip_dir(part) for part in path.relative_to(root).parts[:-1]):
+            continue
+        if is_ignored(rel_path, patterns):
             continue
         yield path
 
@@ -192,9 +229,20 @@ def iter_project_files(root: Path):
 def index_project(conn, root: Path, verbose: bool = True) -> dict:
     root = root.resolve()
     stats = {"files_scanned": 0, "files_indexed": 0, "files_unchanged": 0,
-              "files_skipped": 0, "contexts_created": 0}
+              "files_skipped": 0, "contexts_created": 0, "files_ignored_removed": 0}
 
-    for path in iter_project_files(root):
+    patterns = load_ignore_patterns(root)
+    if patterns:
+        for row in conn.execute("SELECT id, path FROM nodes WHERE type='file'").fetchall():
+            if row["path"] and is_ignored(row["path"], patterns):
+                db.delete_node(conn, row["id"])
+                stats["files_ignored_removed"] += 1
+                if verbose:
+                    print(f"  [removido do índice, .codegraphignore] {row['path']}")
+        if stats["files_ignored_removed"]:
+            conn.commit()
+
+    for path in iter_project_files(root, patterns):
         stats["files_scanned"] += 1
         rel_path = str(path.relative_to(root))
         try:

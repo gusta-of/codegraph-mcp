@@ -86,6 +86,23 @@ vs que não usaram, e olhar o `prompt_tokens` acumulado até a resposta
 final de cada uma -- foi assim que a tabela do item 1 foi montada, só
 falta automatizar isso no dashboard em vez de fazer na mão.
 
+### 6. Tirar código morto/duplicado do índice -- ✅ testado, funciona
+
+Mapeando o `royal_poker_online` de propósito (pra escrever os flows do
+item 1), achei `src/poker.html` -- versão antiga do jogo, de antes da
+migração pra React, não importada em lugar nenhum -- com **48 contextos
+indexados**, mais que qualquer arquivo em uso de verdade no projeto.
+Toda busca por lógica de jogo vinha duplicada: uma vez do código real,
+outra do código morto sob nomes parecidos. Isso não é só "espaço
+desperdiçado" -- é ruído que sobra pro agente filtrar toda vez que
+busca algo, o oposto de "menos rodadas de exploração" que é o objetivo
+principal desta estratégia.
+
+Criei um arquivo `.codegraphignore` (mesma sintaxe do `.gitignore`) e um
+mecanismo no indexador pra excluir arquivo do grafo sem tocar no código
+de verdade -- ver `ARQUITETURA.md` seção 4.2. Testado: busca por
+`bestHand` foi de 2 resultados (1 real + 1 duplicado) pra 1.
+
 ## Achado relacionado, não é bem "economia de token" mas apareceu testando
 
 `Poker.tsx` (o componente principal do jogo) virou **um chunk só de

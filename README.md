@@ -263,6 +263,24 @@ re-processa arquivos que já estavam indexados e não mudaram. Rodei
 `rm .codegraph/graph.db` + `setup-project.sh` de novo pra ver o efeito
 em tudo -- é o jeito de sempre que eu mudar como o chunking funciona.
 
+### Excluir arquivo do índice sem tocar nele (`.codegraphignore`)
+
+Código legado/duplicado (uma versão antiga que não é mais importada em
+lugar nenhum, por exemplo) só suja busca -- criei um `.codegraphignore`
+opcional na raiz do projeto, mesma sintaxe do `.gitignore` (um padrão
+por linha, `#` comentário, sem `/` casa só pelo nome em qualquer pasta):
+
+```
+# .codegraphignore
+src/poker.html
+*.min.js
+```
+
+Roda `codegraph setup` de novo depois de criar/editar esse arquivo --
+ele remove do grafo (não do disco) qualquer arquivo já indexado que
+passou a bater num padrão, e mostra quantos removeu. Detalhe técnico:
+`ARQUITETURA.md`, seção 4.2.
+
 ## Dashboard de efetividade + árvore interativa
 
 ```
