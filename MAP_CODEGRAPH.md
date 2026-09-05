@@ -3,7 +3,8 @@
 Este documento explica **o que cada parte do projeto faz e pra que
 serve**, sem termos técnicos. Se quiser o "como funciona por dentro" de
 verdade, isso está no `ARQUITETURA.md` -- aqui é só o "o que é e pra
-quê".
+quê". Procurando o passo a passo de instalar e começar a usar? Isso é o
+[COMECE_AQUI.md](COMECE_AQUI.md).
 
 ## Em uma frase
 

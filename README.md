@@ -4,15 +4,17 @@ Grafo (árvore/DAG) dos meus projetos, exposto como servidor MCP pro Kimi
 Code (ou qualquer cliente MCP) consultar sob demanda, em vez de carregar
 o projeto inteiro na janela de contexto.
 
-Instalação do zero (Windows/macOS/Linux, todas as variáveis de ambiente):
-[INSTALL.md](INSTALL.md). Isso aqui é o guia rápido de uso pra quem já
-tem tudo instalado. Não quer saber de termo técnico, só entender pra que
-cada parte serve? [MAP_CODEGRAPH.md](MAP_CODEGRAPH.md), em linguagem
-simples. Quer entender por que a conversa fica cara conforme cresce e o
-que ajuda de verdade a segurar isso? [ECONOMIA_DE_TOKENS.md](ECONOMIA_DE_TOKENS.md).
-Como o projeto funciona por dentro (schema, pipeline de indexação, como
-cada tool resolve suas queries) tá documentado em detalhe no
-[ARQUITETURA.md](ARQUITETURA.md).
+**Nunca usou isso antes?** [COMECE_AQUI.md](COMECE_AQUI.md) -- guia
+único, passo a passo, do zero até usando de verdade. Isso aqui embaixo
+é a referência rápida de uso pra quem já tem tudo instalado.
+
+Outros documentos: instalação com todo detalhe de variável de ambiente
+em [INSTALL.md](INSTALL.md); não quer saber de termo técnico, só
+entender pra que cada parte serve? [MAP_CODEGRAPH.md](MAP_CODEGRAPH.md),
+em linguagem simples; por que a conversa fica cara conforme cresce e o
+que ajuda de verdade a segurar isso: [ECONOMIA_DE_TOKENS.md](ECONOMIA_DE_TOKENS.md);
+como o projeto funciona por dentro (schema, pipeline de indexação, como
+cada tool resolve suas queries): [ARQUITETURA.md](ARQUITETURA.md).
 
 ## O modelo de dados
 

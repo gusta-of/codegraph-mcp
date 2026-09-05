@@ -2,9 +2,12 @@
 
 Guia completo pra rodar o `codegraph-mcp` do zero em qualquer sistema.
 Nada aqui depende de caminho de máquina específica -- tudo é configurado
-por variável de ambiente (seção 3). Se você só quer entender como o
-projeto funciona por dentro, ver [ARQUITETURA.md](ARQUITETURA.md); se já
-tem tudo instalado, ver [README.md](README.md) pro dia a dia.
+por variável de ambiente (seção 3). Procurando um passo a passo mais
+narrado, ensinando cada comando na ordem certa? [COMECE_AQUI.md](COMECE_AQUI.md)
+cobre o mesmo caminho de forma mais simples de seguir. Se você só quer
+entender como o projeto funciona por dentro, ver
+[ARQUITETURA.md](ARQUITETURA.md); se já tem tudo instalado, ver
+[README.md](README.md) pro dia a dia.
 
 ## 0. Pré-requisitos
 
