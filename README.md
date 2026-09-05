@@ -287,7 +287,7 @@ passou a bater num padrão, e mostra quantos removeu. Detalhe técnico:
 http://localhost:8081/dashboard
 ```
 
-(o proxy já expõe isso sozinho, não precisa subir nada a mais). Tem duas
+(o proxy já expõe isso sozinho, não precisa subir nada a mais). Tem três
 abas:
 
 - **Visão geral**: com dado real do projeto ativo -- cobertura de
@@ -300,10 +300,14 @@ abas:
   direto do `llama-server` (`usage`/`timings` da API) -- isso sim é
   medição, não estimativa.
 - **Árvore**: navegação visual do grafo -- zoom, arrasto, clique num nó
-  pra ver o conteúdo e expandir os filhos. Arquivos vêm agrupados por
-  pasta (senão um projeto com centenas de arquivos vira uma parede
-  ilegível de nós). Tem um nó "🕒 Histórico (memória)" na raiz também --
-  as conversas reais (prompt+resposta) ficam navegáveis igual ao código,
+  pra ver o conteúdo e expandir os filhos. A raiz é sempre só **3 nós**,
+  um por categoria -- "📁 Índice (código)", "🕒 Histórico (memória)" e
+  "🧭 Flows" -- não importa quantos arquivo ou flow o projeto tenha; cada
+  um só carrega os filhos de verdade no primeiro clique. Dentro de
+  Índice, arquivos vêm agrupados por pasta (senão um projeto com
+  centenas de arquivos vira uma parede ilegível de nós). Dentro de
+  Histórico, as conversas reais (prompt+resposta) ficam navegáveis igual
+  ao código,
   não só nos gráficos da Visão geral; cada uma aparece com um número
   (`#123`, a ordem real de entrada -- passar o mouse mostra a pergunta e
   resposta completas, não dava pra usar texto no próprio rótulo porque
@@ -317,9 +321,11 @@ abas:
   de um loop de tool-calling não viram memória (detalhe no
   `ARQUITETURA.md`, seções 11.9-11.10). Linha sólida = hierarquia; linha
   tracejada laranja = referência cruzada (passo de fluxo → trecho que
-  implementa). Cada clique só desloca a câmera até o que acabou de abrir
-  -- nunca muda o zoom que eu já tinha ajustado na mão, mesmo escondido
-  num canto da tela. Do lado
+  implementa). Clicar de novo num nó já aberto **fecha** ele (some com
+  os filhos, o nó em si continua na tela pra reabrir quando quiser). Cada
+  clique só desloca a câmera até o que acabou de abrir -- nunca muda o
+  zoom que eu já tinha ajustado na mão, mesmo escondido num canto da
+  tela. Do lado
   esquerdo dos botões tem o tamanho atual do grafo (MB/GB) e quanto já
   foi preenchido do teto de histórico configurável -- dá pra editar esse
   teto ali mesmo, mas só pra cima: tentar um valor menor que o banco já

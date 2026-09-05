@@ -696,6 +696,14 @@ const TYPE_STYLE = {{
 }};
 const HISTORY_BUCKET_ID = 'hist:recent';
 const HISTORY_MORE_ID = 'hist:more';
+// Buckets de topo, mesmo espírito do HISTORY_BUCKET_ID -- antes disso,
+// pasta/arquivo de raiz e flow ficavam soltos direto embaixo de 'root',
+// misturados uns com os outros; category por tipo (índice/memória/flow)
+// deixa a raiz sempre com só 3 nós, não importa quantos arquivos ou
+// flows o projeto tenha (achado real, 2026-09-05, pedido do usuário
+// depois de ver a árvore de um projeto com bastante flow mapeado).
+const IDX_BUCKET_ID = 'idx:root';
+const FLOW_BUCKET_ID = 'flow:root';
 let visNodes, visEdges, network;
 const expanded = new Set();
 
@@ -820,13 +828,75 @@ async function loadHistoryPage(parentId, beforeId) {{
   focusNewNodes(newNodes.map(n => n.id));
 }}
 
+// Recolhe um nó já aberto: remove as arestas que saem dele e, pra cada
+// filho que ficar sem NENHUMA aresta entrando (não é referenciado por
+// mais ninguém visível), recolhe ele também (recursivo) antes de
+// remover -- um filho que ainda tem outra aresta apontando pra ele (ex:
+// referência cruzada tracejada de outro nó) fica no lugar, só perde a
+// aresta redundante. Pedido do usuário, 2026-09-05: clicar de novo num
+// nó já aberto tem que fechar, não ficar sem fazer nada.
+function collapseNode(id) {{
+  const outEdges = visEdges.get({{ filter: e => e.from === id }});
+  if (outEdges.length) {{
+    visEdges.remove(outEdges.map(e => e.id));
+    const childIds = [...new Set(outEdges.map(e => e.to))];
+    for (const childId of childIds) {{
+      const stillReferenced = visEdges.get({{ filter: e => e.to === childId }}).length > 0;
+      if (!stillReferenced) {{
+        collapseNode(childId);
+        visNodes.remove(childId);
+      }}
+    }}
+  }}
+  expanded.delete(id);
+}}
+
 async function onNodeClick(params) {{
   if (!params.nodes.length) return;
   const id = params.nodes[0];
   if (id === 'root') return;
 
+  if (id === IDX_BUCKET_ID) {{
+    if (expanded.has(id)) {{ collapseNode(id); return; }}
+    expanded.add(id);
+    document.getElementById('side-panel').innerHTML =
+      '<span class="badge" style="background:' + TYPE_STYLE.file.color + '">índice</span><h3>Código indexado</h3>'
+      + '<div class="note">Arquivos mapeados pelo codegraph, agrupados por pasta. Clique numa pasta ou arquivo pra descer.</div>';
+    const newNodes = [], newEdges = [];
+    for (const key of Object.keys(folderTree.children)) {{
+      const dir = folderTree.children[key];
+      newNodes.push(dirVisNode(key, dir.fullPath));
+      newEdges.push({{ from: id, to: 'dir:' + dir.fullPath, color: {{ color: '#3a3f4d' }} }});
+    }}
+    for (const f of folderTree.files) {{
+      newNodes.push(nodeToVis(f));
+      newEdges.push({{ from: id, to: f.id, color: {{ color: '#3a3f4d' }} }});
+    }}
+    if (newNodes.length) visNodes.add(newNodes);
+    if (newEdges.length) visEdges.add(newEdges);
+    focusNewNodes(newNodes.map(n => n.id));
+    return;
+  }}
+
+  if (id === FLOW_BUCKET_ID) {{
+    if (expanded.has(id)) {{ collapseNode(id); return; }}
+    expanded.add(id);
+    document.getElementById('side-panel').innerHTML =
+      '<span class="badge" style="background:' + TYPE_STYLE.flow.color + '">flow</span><h3>Fluxos mapeados</h3>'
+      + '<div class="note">Resumos escritos à mão, ligados direto no código real -- clique num flow pra ver os passos.</div>';
+    const newNodes = [], newEdges = [];
+    for (const fl of pendingFlowNodes) {{
+      newNodes.push(nodeToVis(fl));
+      newEdges.push({{ from: id, to: fl.id, color: {{ color: '#3a3f4d' }} }});
+    }}
+    if (newNodes.length) visNodes.add(newNodes);
+    if (newEdges.length) visEdges.add(newEdges);
+    focusNewNodes(newNodes.map(n => n.id));
+    return;
+  }}
+
   if (typeof id === 'string' && id.startsWith('dir:')) {{
-    if (expanded.has(id)) return;  // pasta: filhos não mudam, nada novo pra buscar
+    if (expanded.has(id)) {{ collapseNode(id); return; }}
     expanded.add(id);
     const fullPath = id.slice(4);
     const dirNode = findDirNode(fullPath);
@@ -853,7 +923,7 @@ async function onNodeClick(params) {{
   }}
 
   if (id === HISTORY_BUCKET_ID) {{
-    if (expanded.has(id)) return;  // primeira página já carregada, "atualizar árvore" recarrega tudo
+    if (expanded.has(id)) {{ collapseNode(id); return; }}
     expanded.add(id);
     document.getElementById('side-panel').innerHTML =
       '<span class="badge" style="background:' + TYPE_STYLE.history.color + '">histórico</span><h3>Memórias de conversa</h3>'
@@ -881,7 +951,7 @@ async function onNodeClick(params) {{
   const data = await res.json();
   if (data.error) return;
   renderSidePanel(data.node);
-  if (expanded.has(id)) return;
+  if (expanded.has(id)) {{ collapseNode(id); return; }}
   expanded.add(id);
 
   const newNodes = [];
@@ -940,6 +1010,8 @@ function setupResizeListener() {{
   }});
 }}
 
+let pendingFlowNodes = [];
+
 async function buildTree() {{
   expanded.clear();
   if (network) {{ network.destroy(); network = null; }}
@@ -948,27 +1020,25 @@ async function buildTree() {{
   const data = await res.json();
   const allNodes = data.nodes || [];
   const fileNodes = allNodes.filter(n => n.type === 'file');
-  const flowNodes = allNodes.filter(n => n.type === 'flow');
+  pendingFlowNodes = allNodes.filter(n => n.type === 'flow');
   folderTree = buildFolderTree(fileNodes);
 
+  // Raiz sempre com só 3 nós -- um bucket por categoria (índice/memória/
+  // flow), cada um expande os filhos de verdade só no primeiro clique
+  // (mesmo padrão preguiçoso que HISTORY_BUCKET_ID já usava). Sem isso,
+  // pasta/arquivo de raiz e flow ficavam soltos direto embaixo de 'root',
+  // virando uma raiz cada vez mais lotada conforme o projeto cresce.
   const nodeItems = [
     {{ id: 'root', label: data.project || 'projeto', shape: 'ellipse', color: '#2a2e3a', font: {{ color: '#e6e6e6' }} }},
+    {{ id: IDX_BUCKET_ID, label: '📁 Índice (código)', shape: 'box', color: TYPE_STYLE.file.color }},
     {{ id: HISTORY_BUCKET_ID, label: '🕒 Histórico (memória)', shape: 'box', color: TYPE_STYLE.history.color }},
+    {{ id: FLOW_BUCKET_ID, label: '🧭 Flows (' + pendingFlowNodes.length + ')', shape: 'box', color: TYPE_STYLE.flow.color }},
   ];
-  const edgeItems = [{{ from: 'root', to: HISTORY_BUCKET_ID, color: {{ color: '#3a3f4d' }} }}];
-  for (const key of Object.keys(folderTree.children)) {{
-    const dir = folderTree.children[key];
-    nodeItems.push(dirVisNode(key, dir.fullPath));
-    edgeItems.push({{ from: 'root', to: 'dir:' + dir.fullPath, color: {{ color: '#3a3f4d' }} }});
-  }}
-  for (const f of folderTree.files) {{
-    nodeItems.push(nodeToVis(f));
-    edgeItems.push({{ from: 'root', to: f.id, color: {{ color: '#3a3f4d' }} }});
-  }}
-  for (const fl of flowNodes) {{
-    nodeItems.push(nodeToVis(fl));
-    edgeItems.push({{ from: 'root', to: fl.id, color: {{ color: '#3a3f4d' }} }});
-  }}
+  const edgeItems = [
+    {{ from: 'root', to: IDX_BUCKET_ID, color: {{ color: '#3a3f4d' }} }},
+    {{ from: 'root', to: HISTORY_BUCKET_ID, color: {{ color: '#3a3f4d' }} }},
+    {{ from: 'root', to: FLOW_BUCKET_ID, color: {{ color: '#3a3f4d' }} }},
+  ];
 
   visNodes = new vis.DataSet(nodeItems);
   visEdges = new vis.DataSet(edgeItems);

@@ -1391,3 +1391,61 @@ Testado ponta a ponta: clicar no nó #232, depois no #222, depois de
 volta no #232 (o cenário exato reportado -- reclicar num nó já visitado)
 -- painel mostrou o título de #232 nas duas vezes, #222 no meio,
 nenhuma trava.
+
+### 12.5 Raiz da árvore reorganizada em 3 buckets por categoria (2026-09-05)
+
+Pedido do usuário depois de mapear `royal_poker_online` com 5 flows
+novos: "categorizar os tipos... criar um nó por categoria
+memória|index|flow". Antes, só `history` tinha bucket próprio
+(`HISTORY_BUCKET_ID`, seção 11.1) -- pasta/arquivo de raiz e `flow`
+ficavam soltos direto embaixo de `root`, misturados. Com vários flows
+mapeados, a raiz virava uma fileira cada vez mais cheia e sem
+organização por tipo.
+
+Fix: dois buckets novos (`IDX_BUCKET_ID = 'idx:root'`, `FLOW_BUCKET_ID
+= 'flow:root'`), mesmo padrão preguiçoso que `HISTORY_BUCKET_ID` já
+usava -- `buildTree()` agora só cria **3 nós** embaixo de `root`
+(índice, memória, flow), guardando `folderTree`/`pendingFlowNodes` em
+variável de módulo pra usar depois. Cada bucket só busca/desenha os
+filhos de verdade no primeiro clique (`onNodeClick`), reaproveitando a
+mesma lógica que já existia (a árvore de pastas de `IDX_BUCKET_ID` é
+literalmente o que `buildTree()` fazia direto na raiz antes -- só
+moveu de lugar).
+
+Raiz agora é sempre 3 nós, não importa quantos arquivo ou flow o
+projeto tenha. Testado: `royal_poker_online` (27 arquivos, 5 flows) --
+clicar em "📁 Índice" revela pastas/arquivos de raiz; clicar em
+"🧭 Flows (5)" revela os 5 flows; `visNodes.getIds()` confirmou raiz com
+só `['root','idx:root','hist:recent','flow:root']` antes de qualquer
+clique.
+
+### 12.6 Clicar de novo num nó aberto agora fecha (toggle) (2026-09-05)
+
+Pedido direto do usuário: "quando clicarmos novamente no nó depois de
+aberto ele tem que fechar". Antes, todo nó expansível (`dir:`, os 3
+buckets da seção 12.5, e nó de conteúdo com filhos/relações) só ignorava
+o segundo clique (`if (expanded.has(id)) return`, seção 12.4) -- abria e
+nunca mais fazia nada, só crescendo.
+
+Fix: `collapseNode(id)` -- remove as arestas que saem de `id`; pra cada
+filho que ficar **sem nenhuma aresta entrando** depois disso (não é mais
+referenciado por ninguém visível na árvore), recolhe ele também
+primeiro (recursivo, pra não deixar neto órfão) e só então remove o nó.
+Um filho que ainda tem outra aresta apontando pra ele (ex: alvo de uma
+referência cruzada tracejada vindo de outro nó) fica no lugar -- só
+perde a aresta redundante, não some da tela. Cada um dos 4 lugares que
+tinham `if (expanded.has(id)) return` virou
+`if (expanded.has(id)) { collapseNode(id); return; }`.
+
+Importante: **collapse não remove o próprio nó `id`**, só o que está
+abaixo dele -- clicar de novo numa pasta fechada reabre ela (refaz a
+consulta/monta os filhos de novo), igual clicar nela pela primeira vez.
+É o comportamento esperado de árvore recolhível (a pasta continua
+visível fechada, não desaparece junto com o conteúdo).
+
+Testado ponta a ponta, aninhado em 3 níveis (`idx:root` -> `dir:src` ->
+`dir:src/poker`): abrir tudo, fechar só `dir:src` -- os filhos diretos
+de `dir:src` **e** os netos que vieram de `dir:src/poker` (que só
+existia por causa do primeiro) sumiram juntos; `idx:root` continuou
+aberto (não foi tocado); reabrir `dir:src` trouxe tudo de volta
+idêntico a antes.
