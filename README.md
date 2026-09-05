@@ -8,9 +8,11 @@ Instalação do zero (Windows/macOS/Linux, todas as variáveis de ambiente):
 [INSTALL.md](INSTALL.md). Isso aqui é o guia rápido de uso pra quem já
 tem tudo instalado. Não quer saber de termo técnico, só entender pra que
 cada parte serve? [MAP_CODEGRAPH.md](MAP_CODEGRAPH.md), em linguagem
-simples. Como o projeto funciona por dentro (schema, pipeline de
-indexação, como cada tool resolve suas queries) tá documentado em
-detalhe no [ARQUITETURA.md](ARQUITETURA.md).
+simples. Quer entender por que a conversa fica cara conforme cresce e o
+que ajuda de verdade a segurar isso? [ECONOMIA_DE_TOKENS.md](ECONOMIA_DE_TOKENS.md).
+Como o projeto funciona por dentro (schema, pipeline de indexação, como
+cada tool resolve suas queries) tá documentado em detalhe no
+[ARQUITETURA.md](ARQUITETURA.md).
 
 ## O modelo de dados
 
