@@ -71,6 +71,49 @@ def _write_mcp_json(project_dir: Path, codegraph_dir: Path, db_path: Path) -> Pa
     return mcp_json_path
 
 
+_AGENTS_MD_MARKER_START = "<!-- codegraph-mcp: início do bloco automático -->"
+_AGENTS_MD_MARKER_END = "<!-- codegraph-mcp: fim do bloco automático -->"
+_AGENTS_MD_BLOCK = f"""{_AGENTS_MD_MARKER_START}
+## Memória e índice do projeto (codegraph-mcp)
+
+Este projeto tem um índice estruturado do código (arquivos/trechos/fluxos)
+e um histórico de conversas anteriores, disponíveis nas tools
+`mcp__codegraph__*`. O servidor MCP existir não faz você usar essas tools
+sozinho -- prefira ativamente usá-las ANTES de recorrer a `Read`/`Grep`
+lendo o projeto inteiro:
+
+- Pra entender "como funciona X" ou achar onde algo está implementado,
+  tente `mcp__codegraph__search` primeiro (busca full-text em arquivos,
+  trechos E histórico de uma vez).
+- Se existir um fluxo documentado pra essa lógica, `mcp__codegraph__list_flows`
+  + `get_flow` já trazem o passo a passo ligado ao código real.
+- Antes de perguntar de novo algo que talvez já tenha sido decidido nesta
+  conversa, confira `mcp__codegraph__list_history` (mais recentes primeiro).
+- Só leia o arquivo inteiro com `Read` se o que essas tools devolverem não
+  for suficiente pra resolver a tarefa.
+{_AGENTS_MD_MARKER_END}
+"""
+
+
+def _write_agents_md(project_dir: Path) -> Path:
+    """Adiciona (uma vez só, idempotente) um bloco em .kimi-code/AGENTS.md
+    orientando o agente a preferir as tools do codegraph em vez de ler
+    arquivo inteiro por padrão. Sem isso, a tool aparece disponível pro
+    agente (confirmado rodando `kimi -p "liste suas tools"`) mas ele nunca
+    escolhe chamá-la sozinho -- 0% de uso em dezenas de trocas reais,
+    achado real 2026-09-05, ver ARQUITETURA.md. Não mexe em nada que o
+    usuário já tenha escrito nesse arquivo -- só acrescenta o bloco, e não
+    duplica se `setup` rodar de novo."""
+    path = project_dir / ".kimi-code" / "AGENTS.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = path.read_text() if path.exists() else ""
+    if _AGENTS_MD_MARKER_START in existing:
+        return path
+    separator = "\n" if existing and not existing.endswith("\n") else ""
+    path.write_text(existing + separator + ("\n" if existing else "") + _AGENTS_MD_BLOCK)
+    return path
+
+
 def _write_reindex_launcher(project_dir: Path, codegraph_dir: Path) -> Path:
     """Cria, dentro de .codegraph/, um arquivo executável direto pelo SO
     (sem precisar lembrar comando/caminho) que reindexa ESTE projeto de
@@ -126,6 +169,9 @@ def cmd_setup(args):
 
     mcp_json_path = _write_mcp_json(project_dir, codegraph_dir, db_path)
     print(f"==> registrado em {mcp_json_path}")
+
+    agents_md_path = _write_agents_md(project_dir)
+    print(f"==> instrução de uso em {agents_md_path} (orienta o agente a preferir as tools do codegraph)")
 
     history_config_path = history.write_default_config(project_dir)
     print(f"==> config de histórico: {history_config_path} (não mexi se já existia)")

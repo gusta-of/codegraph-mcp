@@ -85,8 +85,10 @@ def get_node(node_id: int) -> dict:
 @mcp.tool()
 def search(query: str, limit: int = 20) -> list[dict]:
     """Busca full-text por nome/conteúdo entre todos os nós (arquivos,
-    contextos, fluxos e passos de fluxo). `query` aceita sintaxe FTS5
-    (ex: "auth AND token")."""
+    contextos, fluxos e passos de fluxo, incluindo histórico de conversas).
+    Passe palavras-chave separadas por espaço (todas precisam aparecer,
+    em qualquer ordem) -- nomes de arquivo com ponto/hífen funcionam
+    normalmente (ex: "audio.ts")."""
     conn = _conn()
     rows = db.search(conn, query, limit)
     return [_node_summary(r) for r in rows]

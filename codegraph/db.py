@@ -137,9 +137,22 @@ def get_roots(conn: sqlite3.Connection, type: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def get_recent(conn: sqlite3.Connection, type: str, limit: int = 20) -> list[sqlite3.Row]:
+def get_recent(
+    conn: sqlite3.Connection, type: str, limit: int = 20, before_id: int | None = None,
+) -> list[sqlite3.Row]:
+    """Página de nós do tipo dado, mais recentes primeiro. Ordena por `id`
+    (não `created_at`): id é autoincrement, já reflete a ordem cronológica
+    real de criação e não tem empate entre linhas gravadas no mesmo
+    segundo -- necessário pra paginação por cursor (`before_id`) ser
+    estável mesmo com registros novos chegando entre uma página e outra
+    (achado real, 2026-09-05, ver ARQUITETURA.md)."""
+    if before_id is not None:
+        return conn.execute(
+            "SELECT * FROM nodes WHERE type=? AND id<? ORDER BY id DESC LIMIT ?",
+            (type, before_id, limit),
+        ).fetchall()
     return conn.execute(
-        "SELECT * FROM nodes WHERE type=? ORDER BY created_at DESC LIMIT ?", (type, limit)
+        "SELECT * FROM nodes WHERE type=? ORDER BY id DESC LIMIT ?", (type, limit)
     ).fetchall()
 
 
@@ -159,13 +172,33 @@ def get_edges_to(conn: sqlite3.Connection, node_id: int) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM edges WHERE dst_id=?", (node_id,)).fetchall()
 
 
+def _sanitize_fts_query(query: str) -> str:
+    """Envolve cada palavra em aspas duplas (escapando aspas internas no
+    jeito do FTS5: `"` vira `""`), transformando a busca numa sequência de
+    frases literais em AND implícito. Sem isso, qualquer termo com pontuação
+    fora do padrão bareword do parser do FTS5 -- nome de arquivo com ponto
+    (`audio.ts`), hífen, dois-pontos -- derruba a query com
+    `fts5: syntax error`, já que o parser da MATCH tenta interpretar esses
+    caracteres como operador especial em vez de parte do termo (achado real,
+    2026-09-05: foi provavelmente por isso que o agente viu "busca vazia" e
+    caiu pro Grep -- a tool não devolvia vazio, ela quebrava. Ver
+    ARQUITETURA.md). Isso troca a sintaxe avançada do FTS5 (ex: "auth AND
+    token" como booleano) por match literal -- aceitável aqui porque quem
+    chama essa tool é o agente, não um usuário digitando query FTS5 de
+    propósito."""
+    terms = query.split()
+    if not terms:
+        return '""'
+    return " ".join('"' + t.replace('"', '""') + '"' for t in terms)
+
+
 def search(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[sqlite3.Row]:
     return conn.execute(
         """SELECT nodes.* FROM nodes_fts
            JOIN nodes ON nodes.id = nodes_fts.rowid
            WHERE nodes_fts MATCH ?
            ORDER BY rank LIMIT ?""",
-        (query, limit),
+        (_sanitize_fts_query(query), limit),
     ).fetchall()
 
 

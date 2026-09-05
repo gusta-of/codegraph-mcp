@@ -37,6 +37,40 @@ def write_default_config(project_root: Path) -> Path:
     return path
 
 
+class LimitTooSmallError(ValueError):
+    """Usuário tentou definir um teto menor que o banco já ocupa hoje."""
+
+    def __init__(self, requested_mb: float, current_mb: float):
+        self.requested_mb = requested_mb
+        self.current_mb = current_mb
+        super().__init__(
+            f"o banco já ocupa {current_mb:.1f} MB -- não dá pra definir um teto menor "
+            f"({requested_mb} MB) sem apagar dados. Se você quer mesmo um teto menor, "
+            f"apague o arquivo .codegraph/graph.db manualmente e rode `codegraph setup` "
+            f"de novo pra reindexar do zero já com o teto novo."
+        )
+
+
+def set_max_mb(project_root: Path, mb: int, db_path: Path) -> None:
+    """Grava um novo teto -- recusa (`LimitTooSmallError`) se `mb` for
+    menor que o tamanho atual do arquivo .db. Sem essa checagem,
+    `enforce_limit` entraria num estado impossível de satisfazer sem
+    apagar tudo, incluindo indexação (que ele nunca apaga -- ver seção
+    9.4 do ARQUITETURA.md), silenciosamente."""
+    if db_path.exists():
+        current_mb = db_path.stat().st_size / (1024 * 1024)
+        if mb < current_mb:
+            raise LimitTooSmallError(requested_mb=mb, current_mb=current_mb)
+
+    path = config_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if path.exists():
+        data = json.loads(path.read_text())
+    data["max_history_mb"] = mb
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
 def record_exchange(
     conn: sqlite3.Connection,
     db_path: str,

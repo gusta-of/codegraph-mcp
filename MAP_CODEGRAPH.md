@@ -95,6 +95,12 @@ verdade, não com "eu acho que sim".
 **Como se conecta com o Agente**: é só um espelho -- não interfere em
 nada, só mostra o que já está acontecendo.
 
+Essa mesma página tem uma segunda aba, **Árvore** -- um jeito visual de
+passear pelo Mapa do Código: você vê as pastas, clica pra abrir, clica
+num arquivo e vê o pedaço de código que está guardado ali dentro, dá pra
+dar zoom e arrastar pra explorar. É útil pra conferir "o que exatamente
+o Agente está enxergando" sem precisar pedir pra ele.
+
 ## O caminho de uma pergunta, passo a passo
 
 1. Você pergunta algo pro Agente (Kimi Code).
@@ -123,10 +129,15 @@ sendo gravada) acontece sozinho, sem você precisar mexer em nada.
 
 ## O que essa memória NÃO faz sozinha
 
-- Ela não obriga o Agente a usá-la -- ele só usa se achar que vale a
-  pena, ou se você pedir explicitamente ("usa a busca do codegraph pra
-  achar X"). Se ele nunca usar, o Painel de Resultados vai mostrar isso
-  com números reais, não vai fingir que está ajudando.
+- Ela não obriga o Agente a usá-la de verdade -- só ter a ferramenta
+  disponível não é suficiente, comprovado na prática (0% de uso mesmo
+  com tudo conectado certo). Por isso `codegraph setup` também deixa uma
+  instrução escrita (`.kimi-code/AGENTS.md`) pedindo pro Agente preferir
+  essa memória antes de ler arquivo inteiro -- isso muda o comportamento
+  de verdade, mas ainda é uma sugestão, não uma trava: se o Agente achar
+  que não precisa, ou você pedir outra coisa, ele pode ignorar. Se ele
+  nunca usar, o Painel de Resultados vai mostrar isso com números reais,
+  não vai fingir que está ajudando.
 - Ela não entende sozinha "como seu sistema funciona" em nível de
   negócio -- isso é o que os **Fluxos** (peça 2) resolvem, e alguém
   precisa escrever eles.

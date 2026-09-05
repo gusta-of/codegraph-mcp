@@ -701,3 +701,584 @@ desse fix (2026-09-03) estão subestimados** -- podem ter usado a tool
 de verdade e não terem sido contados. O dashboard não reprocessa
 histórico antigo automaticamente; só as trocas novas, depois do fix,
 contam certo.
+
+### 10.8 Uso real zero mesmo com detecção correta e MCP conectado (2026-09-05)
+
+Mesmo depois do fix da seção 10.7, o dashboard continuava mostrando
+"0.0% trocas que usaram tool do codegraph-mcp" e "~0 tokens poupados"
+depois de dezenas de trocas reais no projeto `royal_poker_online`. Isso
+não é mais bug de contagem -- é a tool nunca sendo chamada, de verdade.
+
+Investigação, eliminando causas uma a uma:
+
+1. **O servidor MCP está registrado certo?** Sim -- `.kimi-code/mcp.json`
+   do projeto aponta pro `codegraph.server` certo, no formato que a
+   própria documentação embutida no binário do Kimi Code espera
+   (`<cwd>/.kimi-code/mcp.json`, confirmado com `strings` no binário).
+2. **O servidor MCP sobe e expõe as tools direito?** Sim -- testado
+   direto com um `ClientSession` real do SDK `mcp` (sem depender do Kimi
+   Code): handshake completo, `list_tools()` devolve as 7 tools
+   (`list_files`, `get_file_tree`, `get_node`, `search`, `list_flows`,
+   `get_flow`, `list_history`) certinho.
+3. **O Kimi Code enxerga essas tools numa sessão de verdade?** Sim --
+   rodando `kimi -p "liste suas tools"` dentro do projeto, o modelo lista
+   as 7 tools `mcp__codegraph__*` junto com as nativas. Confirmado: a
+   conexão MCP nunca foi o problema.
+
+Causa raiz real: **nada nunca instruiu o modelo a preferir essas tools**.
+Elas aparecem disponíveis, mas um MCP tool exposto não faz o modelo
+escolher usá-lo -- ele decide sozinho, e por padrão prefere as tools
+nativas que já conhece bem (`Read`, `Grep`, `Glob`). Não existia nenhum
+`AGENTS.md` no projeto (nem em `.kimi-code/`, nem na raiz) com qualquer
+menção ao codegraph. Sem essa peça, o servidor MCP existir é necessário
+mas não suficiente.
+
+**Fix**: `codegraph setup` (via `_write_agents_md()` em `cli.py`) agora
+gera, uma vez só (idempotente -- checa um marcador HTML antes de
+escrever, nunca duplica nem apaga o que o usuário já tenha escrito no
+arquivo), um bloco em `.kimi-code/AGENTS.md` instruindo o agente a tentar
+`mcp__codegraph__search`/`list_flows`/`list_history` antes de recorrer a
+`Read`/`Grep` no projeto inteiro. `setup-project.sh` ganha isso de graça
+(só chama `codegraph.cli setup`).
+
+**Verificado de verdade, antes/depois**: rodando `kimi -p "Como funciona
+o sistema de áudio deste projeto?"` depois do `AGENTS.md` existir, o
+modelo narrou explicitamente "Let me start by searching for
+audio-related content in the codegraph" -- primeira vez em toda a sessão
+que ele tentou a tool por conta própria, sem ninguém pedir
+explicitamente "usa o codegraph". Ver seção 10.9 pro que aconteceu
+*depois* dessa tentativa (a busca quebrava).
+
+### 10.9 Bug real: `search` quebrava com ponto no termo (2026-09-05)
+
+Continuação direta do teste da seção 10.8: o modelo tentou `search` com
+algo envolvendo `audio.ts` (nome de arquivo), a tool "devolveu vazio", e
+ele caiu pra `Grep` -- mas na verdade a tool não devolvia vazio, ela
+**quebrava**. Reproduzido isolado com um `ClientSession` de teste:
+
+```
+search(query="audio.ts")
+  -> sqlite3.OperationalError: fts5: syntax error near "."
+```
+
+Causa: `db.search()` passava a string de busca direto pro `MATCH` do
+FTS5 sem sanitizar. O parser de query do FTS5 (não o tokenizer -- o
+tokenizer lida bem com pontuação na hora de indexar) trata caracteres
+como `.`, `-`, `:`, `"` como possível início de operador especial fora
+de uma frase entre aspas; um termo bareword com esses caracteres no meio
+derruba a query inteira com `syntax error`. Como o agente frequentemente
+busca por nome de arquivo (`audio.ts`, `Poker.tsx`) ou identificador com
+hífen, isso quebrava a tool exatamente nos casos de uso mais comuns.
+
+**Fix**: `db._sanitize_fts_query()` -- separa a query em palavras e
+envolve cada uma em aspas duplas (escapando aspas internas no jeito do
+FTS5, `"` -> `""`), virando uma sequência de frases literais em AND
+implícito. Isso torna qualquer entrada segura (testado com
+`audio.ts`, `Poker.tsx`, `get-node`, `a:b`, e até `x"y` -- nenhum quebra
+mais), ao custo de deixar de aceitar a sintaxe booleana avançada do FTS5
+(`"auth AND token"` como operador -- agora `AND` vira palavra literal
+buscada, não operador). Aceitável: quem chama essa tool é o agente
+(que não sabe/precisa saber sintaxe FTS5), não uma pessoa digitando
+query avançada de propósito -- a docstring da tool `search` (`server.py`)
+foi atualizada pra não prometer mais essa sintaxe.
+
+## 11. Árvore interativa (aba "Árvore" do `/dashboard`)
+
+Segunda aba da mesma página do dashboard (seção 10.4) -- navegação
+visual do grafo: zoom, arrastar, clicar num nó pra ver o conteúdo e
+expandir os filhos. Usa [vis-network](https://visjs.github.io/vis-network/)
+via CDN (só JS/CSS, sem passo de build).
+
+### 11.1 Por que carregamento sob demanda, não tudo de uma vez
+
+Primeira tentativa: jogar todo mundo (~1.400 nós de um projeto real)
+como filho direto de um nó raiz. Não escala -- renderiza, mas o grafo
+fica largo demais pra caber na tela sem dar `fit()` numa visão tão zerada
+que fica ilegível. Fix: dois níveis de carregamento preguiçoso:
+
+1. **`GET /api/tree/roots`** devolve só os nós de topo (`file`/`flow`,
+   sem `content`, payload pequeno mesmo em projeto grande).
+2. **Agrupamento por pasta é 100% client-side** (`buildFolderTree` no
+   JS) -- a partir do `path` de cada arquivo, monta uma árvore de pastas
+   sintética no navegador, sem endpoint novo nenhum. Pastas viram nós
+   com id `"dir:caminho/da/pasta"` (só existem no browser). Isso reduz
+   a visão inicial de "412 arquivos soltos" pra "~15-20 pastas de topo"
+   -- navegável de verdade.
+3. **`GET /api/tree/node/<id>`** só é chamado quando um nó **real** (não
+   pasta sintética) é clicado -- devolve o nó completo (com `content`),
+   filhos (`db.get_children`) e arestas relacionadas nos dois sentidos
+   (`db.get_edges_from`/`get_edges_to`) -- exatamente a mesma composição
+   que a tool MCP `get_node` já fazia (`server.py`), só reaproveitada
+   aqui pra JSON em vez de resposta de tool.
+
+Clique expande e não colapsa (`Set` de ids já expandidos, `expanded`) --
+simples o suficiente pra v1; nós repetidos (mesmo nó alcançável por dois
+caminhos, ex: um `flow_step` que aponta pro mesmo `file_context` que já
+apareceu como filho de um arquivo) são deduplicados via
+`visNodes.get(id)` antes de adicionar de novo.
+
+### 11.2 Testado por dentro, não só por fora (achado de processo, 2026-09-03)
+
+Rodando dentro do ambiente de automação de browser desta sessão: os
+endpoints respondiam certo (200, dados reais), o `<canvas>` existia com
+tamanho correto, sem erro nenhum no console -- mas nada aparecia no
+print de tela. Investigando: o canvas estava **fisicamente vazio**
+(`getImageData` -- zero pixels não-transparentes). A própria ferramenta
+de automação avisou "the Browser pane is currently hidden" -- rAF
+(`requestAnimationFrame`, que o vis-network usa pro loop de desenho) não
+roda em aba em segundo plano, em nenhum navegador -- comportamento padrão
+do browser, não bug do código.
+
+Verificação alternativa, sem depender de pintura de tela:
+`network.getPositions()` (estado interno da biblioteca, calculado pelo
+layout, independente de canvas/pixels) devolveu 18 nós com posições reais
+calculadas (root + pastas de topo + arquivos-raiz + fluxos) -- confirma
+que os dados, o agrupamento por pasta, e o layout hierárquico funcionam
+certos.
+
+**Isso não foi suficiente -- ficou faltando um pedaço real.** Testando
+no navegador de verdade do usuário: a aba do Chrome **travou e fechou**
+("A aplicação Google Chrome fechou inesperadamente"), com a tela
+crescendo sem parar antes de morrer. `getPositions()` confirma dados e
+layout, mas não teria pego isso -- é um bug de *dimensionamento do
+contêiner na tela*, categoria totalmente diferente de "os dados estão
+certos". Declarar sucesso só com a verificação por dentro foi cedo
+demais.
+
+### 11.3 O bug real: loop de redimensionamento infinito (corrigido, 2026-09-03)
+
+Causa: `.tree-layout`/`#network` tinham altura via `72vh`
+(viewport) + CSS Grid esticando o item pra preencher a linha. O
+`vis-network` tem seu próprio redimensionamento automático
+(`autoResize: true` por padrão, usa `ResizeObserver`) -- com um
+container cuja altura depende de unidade relativa/grid em vez de pixel
+fixo, entra num ciclo: o canvas mede o espaço disponível, pede pra
+ocupar aquilo, o container (grid/vh) recalcula e cresce um pouco em
+resposta, o canvas mede de novo um espaço maior, pede mais ainda -- sem
+convergir, até estourar memória/travar a aba. É um problema documentado
+da comunidade do vis-network, não exclusivo desse projeto.
+
+**Fix**: `.tree-layout`/`#network`/`.side-panel` passaram a ter altura
+**fixa em pixel** (`600px`, não `72vh`/grid-stretch), e a opção
+`autoResize: false` foi passada explícita pro `new vis.Network(...)`
+(junto com `width`/`height` fixos nas options) -- o `vis-network` mede o
+espaço **uma vez só** e nunca mais reage a mudança de tamanho do
+container, quebrando o ciclo de propósito.
+
+**Validado de um jeito que não depende de pintura de tela nem de aba em
+primeiro plano** (contorna a limitação da seção 11.2): medi
+`document.body.scrollHeight` e a altura real do `.tree-layout`/`#network`
+via `getBoundingClientRect()` em 3 momentos ao longo de ~5 segundos --
+ficou **exatamente igual** nos três (`600`/`602px`, sem crescer 1px),
+diferente da pintura em canvas, layout/reflow acontece independente da
+aba estar em primeiro ou segundo plano, então esse teste específico é
+confiável mesmo nesse ambiente de automação. Ainda assim, a confirmação
+visual final (o desenho aparecendo mesmo) depende do usuário abrir num
+navegador de verdade -- ver seção 11.2.
+
+### 11.4 Layout empilhado + nós menores (2026-09-03)
+
+Pedido do usuário depois de ver funcionando de verdade: lado-a-lado
+(grafo + painel) virou **empilhado** -- grafo em cima (100% de largura,
+altura em px calculada como fração do viewport -- 60% normal, 85% em
+tela cheia, seção 11.6) e painel de conteúdo embaixo (100% de largura,
+`max-height: 340px` com scroll próprio). `sizeTreeLayout()` continua
+setando altura em **px direto no `#network`**, não mais no wrapper
+`.tree-layout` -- mesmo princípio anti-loop da seção 11.3, só mudou qual
+elemento recebe o valor calculado.
+
+Nós ficaram menores (`nodes: { size: 10 }`, default da lib é `25`) e o
+espaçamento hierárquico caiu de `130`→`90` (nós menores cabem mais
+apertados sem colidir).
+
+### 11.5 Bug real: botão quebrava a página inteira (achado e corrigido, 2026-09-03)
+
+O botão "Atualizar árvore" ganhou a mesma classe `tab-btn` das abas, só
+por conveniência de estilo. A lógica de troca de aba escuta **todo**
+elemento `.tab-btn` e assume que ele tem `data-tab` -- o botão de
+atualizar não tem. Clicar nele disparava as duas coisas: a troca de aba
+(que remove `.active` de **todos** os `.tab-content` antes de tentar
+adicionar de volta em `document.getElementById('tab-' + undefined)`,
+que é `null`) E o `refreshTree()`. A chamada em cima do `null` lança
+exceção **depois** de já ter escondido as duas abas -- página inteira
+fica em branco, exatamente o que o usuário viu de verdade ("quando eu
+clico em atualizar árvore ela some").
+
+Comprovado sem depender de tela: `read_console_messages` mostrou o erro
+exato (`Cannot read properties of null (reading 'classList')`), apontando
+pra linha certa. **Fix**: classe própria (`.refresh-btn`), sem
+sobreposição com o seletor `.tab-btn` -- o botão nunca mais entra no
+loop de troca de aba. Testado de verdade: clicar em "Atualizar" depois
+do fix mantém `tab-tree` com `active` na classe, sem erro nenhum.
+
+Lição: um seletor de classe genérico demais (`.tab-btn` pra "qualquer
+botão parecido") pode acoplar comportamento que não devia -- vale
+conferir se um elemento novo realmente deve entrar num `querySelectorAll`
+já existente, não só copiar a classe pelo visual.
+
+### 11.6 Tela cheia + rótulo de histórico sobrepondo (2026-09-03)
+
+**Botão "Tela cheia"**: `window.open()` pra mesma URL do dashboard +
+`?fullscreen=1` (preserva `?project=` se houver), numa janela nova do
+tamanho da tela (`screen.availWidth/Height`). A página, ao carregar com
+esse parâmetro (`IS_FULLSCREEN`), já abre direto na aba Árvore
+(`.click()` programático no botão da aba) e usa `85%` da altura da tela
+pro grafo em vez de `60%` -- mesma função `sizeTreeLayout()`, só o
+percentual muda.
+
+**Rótulo de histórico sobrepondo**: o nome de um nó `history` é o
+preview do prompt, até 80 caracteres (`history.py`) -- com ~50 nós
+irmãos e `nodeSpacing: 90`, o texto ficava ilegível, um em cima do outro
+(achado real, visto na tela do usuário). Primeira tentativa: cortar o
+rótulo em 18 caracteres -- **não foi suficiente** (seção 11.7): muitos
+nós de histórico têm conteúdo parecido/repetido (o Kimi Code manda o
+mesmo `<system-reminder>` várias vezes), então mesmo curtos os rótulos
+formavam uma parede repetida ilegível, visto de novo na tela do usuário.
+
+### 11.7 Troca de estratégia pro rótulo de histórico: número, não texto (2026-09-03)
+
+Cortar o texto (seção 11.6) não resolveu de vez -- largura ainda variava
+e textos repetidos/parecidos entre nós vizinhos continuavam formando uma
+faixa confusa. Pedido do usuário: usar **numeração** (ordem de entrada)
+em vez de qualquer preview de texto, com a descrição completa só no
+hover.
+
+Implementado sem precisar de contador à parte: o `id` de um nó no banco
+**já é** a ordem real de entrada (`AUTOINCREMENT` do SQLite = ordem
+cronológica de criação). `nodeToVis` troca o rótulo pra `'#' + n.id`
+só pra `type === 'history'` -- largura fixa e pequena (nunca colide,
+não importa quantos irmãos ou quão parecido o conteúdo seja), e o texto
+completo continua no `title` (hover) e no painel lateral ao clicar.
+Testado: rótulo real virou `"#1526"`, tooltip com o texto original
+completo (`"history\n<system-reminder> ..."`).
+
+### 11.8 Estatística de tamanho + teto editável com trava de segurança (2026-09-03)
+
+Pedido do usuário: mostrar tamanho do grafo (MB/GB) e % preenchido do
+teto de histórico na aba Árvore, atualizando junto do botão "Atualizar
+árvore" -- e, se o usuário tentar baixar o teto (`max_history_mb`) pra
+menos do que o banco já ocupa hoje, **bloquear** a ação com um aviso
+claro (em vez de deixar `enforce_limit` entrar num estado impossível de
+satisfazer sem apagar indexação, que ele nunca faz -- seção 9.4).
+
+Isso exigiu dar um jeito de *ação* no editar o teto pra ter o que
+bloquear -- até aqui o valor só era editado abrindo o `.json` na mão. Não
+tem mais essa limitação: input + botão "Salvar teto" na própria aba
+Árvore.
+
+**Backend** (`history.py`):
+- `history.LimitTooSmallError` -- exceção dedicada, guarda `requested_mb`
+  e `current_mb`, mensagem já pronta explicando o que fazer (apagar
+  `.codegraph/graph.db` manualmente + rodar `codegraph setup` de novo).
+- `history.set_max_mb(project_root, mb, db_path)` -- só escreve o novo
+  valor se `mb >= tamanho atual do arquivo .db em MB`; caso contrário
+  levanta `LimitTooSmallError` **sem tocar no arquivo de config**.
+
+**Rotas novas** (`proxy.py`):
+- `GET /api/history-config` -- `{{db_size_bytes, max_history_mb,
+  percent_used}}`, calculado na hora (`Path.stat().st_size` + `history.load_max_bytes`).
+- `POST /api/history-config` (`{{max_history_mb: N}}`) -- chama
+  `history.set_max_mb`; devolve `409` com a mensagem de erro se recusado
+  (não `500` -- é uma rejeição esperada/validada, não uma falha).
+
+Ambas na mesma rota `/api/history-config`, diferenciadas só pelo método
+HTTP (`GET`/`POST`) -- Starlette resolve isso certo com duas entradas
+`Route(...)` de mesmo path, testado (as duas responderam nos métodos
+certos).
+
+**Frontend**: `loadHistoryStats()` busca e formata (`formatSize` --
+MB abaixo de 1024, GB acima) e roda junto de `buildTree()` tanto no
+carregamento inicial (`initTree`) quanto no botão "Atualizar árvore"
+(`refreshTree`, via `Promise.all`). `saveMaxHistory()` manda o `POST`;
+se a resposta não for `ok`, mostra a mensagem de erro do backend num
+`alert()` -- é isso que materializa o "bloqueio" pedido, sem inventar
+lógica de validação duplicada no front (a regra mora só no backend).
+
+Testado de ponta a ponta contra dado real: `GET` retornou `4.6 MB de
+15360 MB, 0%`; `POST` com `2` (menor que o banco) devolveu `409` com a
+mensagem certa e **não alterou o arquivo** de config (confirmado lendo
+o `.json` depois); `POST` com um valor válido salvou normal.
+
+### 11.9 Dois bugs reais achados pelo usuário: histórico com "lixo" e scroll na tela cheia (2026-09-05)
+
+Dois problemas achados olhando a árvore de verdade, nenhum dos dois era
+do modelo nem do Kimi Code -- os dois eram do jeito que o `proxy.py`
+gravava/exibia dado.
+
+**Bug 1 -- nó de histórico com `PROMPT` = lembrete e `RESPONSE` vazia.**
+O usuário reparou que muitos nós `history` tinham como conteúdo só um
+`<system-reminder>...</system-reminder>` (lembrete de data, de todo
+list etc) como "prompt" e nada como resposta. Causa raiz: o Kimi Code
+não faz **uma** chamada por pergunta do usuário -- faz uma chamada nova
+pra `/v1/chat/completions` a cada rodada do loop de tool-calling
+(pergunta -> modelo pede tool -> tool roda -> manda resultado de volta
+pro modelo -> repete até ter resposta final). Em cada rodada intermediária
+ele reenvia a conversa inteira, e reinjeta os `<system-reminder>` como
+mensagens **`role: "user"`** novas, sem nenhum texto humano junto.
+
+`_last_user_message()` pegava sempre a *última* mensagem `role=user` do
+array -- que nas rodadas intermediárias é exatamente esse
+system-reminder sintético, nunca a pergunta real (que fica mais pra
+trás no array). E `_log_exchange()` só recusava gravar quando *as duas*
+metades (prompt e resposta) vinham vazias -- uma rodada onde o modelo só
+pediu uma tool (sem texto de resposta) ainda passava, porque o "prompt"
+(o lembrete) não estava vazio.
+
+Resultado: cada pergunta real do usuário virava VÁRIOS nós de
+histórico, a maioria lixo (lembrete como prompt, resposta vazia),
+poluindo a árvore e desperdiçando espaço do teto configurável (seção
+11.8) com memória que não serve pra nada -- o objetivo dela é dar
+contexto de conversas passadas pro modelo, e um par prompt-vazio ou
+resposta-vazia não ajuda em nada nisso.
+
+Fix, os dois lados (`proxy.py`):
+- `_last_user_message()` agora limpa `<system-reminder>...</system-reminder>`
+  de cada mensagem `user` (`_strip_system_reminders`, regex com
+  `re.DOTALL`) e só aceita a mensagem se sobrar algo depois de limpar --
+  senão continua procurando pra trás no array até achar a pergunta
+  humana real.
+- `_log_exchange()` trocou o `if not prompt and not content` (só recusa
+  se os DOIS estiverem vazios) por `if not prompt.strip() or not
+  content.strip()` (recusa se QUALQUER um dos dois estiver vazio) --
+  nunca mais grava metade de um par.
+
+Testado isoladamente (sem depender do Kimi Code de verdade): array
+simulando uma pergunta real seguida de rodada de tool-call e reminder
+sintético -- `_last_user_message` devolveu a pergunta real, ignorando o
+reminder; array só com reminder devolveu `""` (e portanto
+`_log_exchange` vai recusar gravar).
+
+**Bug 2 -- popup de "Tela cheia" com scroll.** Print do usuário mostrou
+barra de rolagem vertical E horizontal dentro do popup aberto por
+"🖥️ Tela cheia". Causa: `sizeTreeLayout()` calculava a altura do grafo
+como uma fração fixa "no chute" da altura da tela (85% em tela cheia),
+sem descontar o que ainda aparecia acima/abaixo dele -- `h1`, subtítulo,
+abas, a linha de estatística/botões, o painel de conteúdo e o rodapé de
+instruções. Somando tudo isso ao 85% do grafo, o total passava da altura
+real da janela -- e a barra de rolagem vertical que aparece por causa
+disso rouba espaço horizontal, o que gerava a barra horizontal também
+(efeito em cascata de um único erro de conta).
+
+Fix: no popup de tela cheia (`?fullscreen=1`), esconde `h1`/subtítulo/abas
+de vez (`body.fullscreen-mode h1, .sub, .tabs { display: none }` -- não
+faz sentido navegar de aba lá, o popup já abre direto na árvore) e
+`sizeTreeLayout()` deixou de chutar fração e passou a **medir** o espaço
+que sobra de verdade: `window.innerHeight` menos a posição real de onde
+o `.tree-layout` começa (`getBoundingClientRect().top` -- já reflete
+automaticamente se o cabeçalho está escondido ou não) menos a altura
+máxima que o painel de conteúdo pode ter (`340px`, o mesmo valor do
+`max-height` no CSS -- usa o teto, não o tamanho atual, porque o painel
+cresce quando o usuário clica num nó, e a altura do grafo não pode
+depender de quando isso acontece) menos a altura real do rodapé de
+instruções (`getBoundingClientRect().height`, também dinâmica -- reflete
+se o texto quebrou em mais linhas numa janela estreita) menos uma
+margem de segurança de 12px. `overflow: hidden` em `html`/`body` no modo
+tela cheia fica como rede de segurança contra um resto de arredondamento,
+não como a correção em si (a correção é medir certo, não é esconder o
+sintoma).
+
+### 11.10 Reforço do fix de histórico incompleto + limpeza retroativa (2026-09-05)
+
+Continuação da seção 11.9: mesmo depois daquele fix, sobravam dois
+padrões de "lixo" que o usuário reparou de novo, olhando a árvore:
+
+1. **Narração + tool-call na mesma resposta.** `_log_exchange()` só
+   recusava gravar quando `content` vinha vazio -- mas o modelo às vezes
+   narra algo ("deixa eu checar o arquivo...") **junto** com uma
+   tool-call no meio do loop, o que dá `content` não-vazio mesmo não
+   sendo a resposta final. Fix: `has_tool_call` -- `chat_completions()`
+   agora repara se a resposta (não-streaming: `message.tool_calls`;
+   streaming: acumulado a cada chunk via `_extract_delta`) veio com
+   qualquer tool-call, e `_log_exchange()` recusa gravar se
+   `has_tool_call` for verdadeiro, não importa o que tinha em `content`.
+   Só a resposta final (sem tool-call pendente) conta como troca completa.
+2. **Mensagens sintéticas de compactação de contexto.** Além do
+   `<system-reminder>...</system-reminder>` (seção 11.9), o Kimi Code
+   também injeta como `role: user` texto plano de housekeeping (handoff
+   de "vai ficar sem contexto" / "conversa foi compactada") que não é
+   `<system-reminder>` (por isso o regex daquela seção não pegava) --
+   apareceu de verdade nos ids 201-203 do projeto `royal_poker_online`.
+   Fix: `_is_synthetic_prompt()` reconhece esses prefixos fixos
+   (`"You are about to run out of context."`,
+   `"The conversation so far has been compacted"`) e `_last_user_message()`
+   pula essas mensagens do mesmo jeito que pula reminder, continuando a
+   busca pra trás no array.
+
+**Limpeza retroativa**: os dois fixes acima (e o da seção 11.9) só
+previnem lixo **novo** -- não apagam o que já tinha sido gravado antes
+deles existirem. Rodada uma limpeza manual, uma vez só, nos bancos que
+já tinham histórico (`royal_poker_online`: 53 de 61 nós `history` eram
+lixo por esse critério; `ambiente_pessoal_llm`: 64 de 66) -- removidos
+com a mesma regra que `_log_exchange` já aplica (prompt vazio/só-lembrete
+OU resposta vazia). Não é uma rotina automática permanente -- rodar de
+novo se algum projeto antigo ainda tiver entradas assim (comparar contra
+os critérios de `_is_synthetic_prompt`/`_strip_system_reminders`/checar
+se a metade depois de `RESPONSE:` no `content` do nó veio vazia).
+
+Efeito medido, projeto `royal_poker_online`: busca por `"audio"` (ver
+seção 10.9) foi de 20 resultados (a maioria `<system-reminder>`
+repetido) pra 4 (todos genuinamente relevantes).
+
+### 11.11 Paginação do histórico na árvore -- mais recentes primeiro (2026-09-05)
+
+Antes: clicar no balde de histórico (`hist:recent`) buscava as até 50
+entradas mais recentes de uma vez e desenhava todas como filhas diretas
+do balde -- com dezenas de entradas isso virava uma fileira só de
+bolinhas, larga demais pra caber na tela e sem jeito de ver entradas mais
+antigas que a 50ª.
+
+Fix, paginação por **cursor** (`before_id`), não por offset -- `id` é
+autoincrement e já reflete ordem cronológica real (mesmo raciocínio da
+seção 11.7), então `WHERE id < :before_id ORDER BY id DESC LIMIT :n` é
+estável mesmo com registros novos chegando entre uma página e outra (uma
+paginação por offset teria esse problema: inserções no meio deslocam
+o que cada página devolve).
+
+- `db.get_recent()` ganhou `before_id: int | None` opcional.
+- `/api/tree/history` aceita `before_id` na query string, busca
+  `limit+1` linhas pra saber se sobra mais uma página sem precisar de um
+  `COUNT` separado, e devolve `{"nodes", "has_more", "next_before_id"}`.
+- No front, `loadHistoryPage(parentId, beforeId)` busca uma página e, se
+  `has_more`, pendura um nó sentinela synthetic (`hist:more`, id fixo,
+  guarda o cursor da próxima página no próprio objeto do nó) com o rótulo
+  "… carregar mais antigas". Clicar nele remove o sentinela antigo e
+  busca a próxima página a partir do cursor guardado; se ainda sobrar
+  mais depois dessa, um sentinela novo entra no lugar.
+
+Testado ponta a ponta forçando `limit=2` (via um `fetch` monkey-patchado
+temporariamente no console) num histórico de 8 entradas: primeira
+página trouxe as 2 mais recentes + sentinela; clicar no sentinela trouxe
+as próximas 2 (cursor avançou certo) + sentinela de novo, até esgotar.
+
+### 11.12 Espaçamento maior no layout; câmera focando só no que abriu (2026-09-05)
+
+Dois ajustes na aba Árvore depois de feedback visual real:
+
+- **Espaçamento**: `nodeSpacing`/`levelSeparation` do layout hierárquico
+  foram de `90`/`100` pra `160`/`150` (mais `blockShifting`/
+  `edgeMinimization` explícitos). Com pouco espaço, caixa com rótulo
+  comprido (nome de arquivo longo, por exemplo) desenhava por cima da
+  vizinha mesmo a árvore crescendo na direção certa (`direction: 'UD'`,
+  de cima pra baixo, já era assim antes -- o problema nunca foi a
+  direção, era espaço de menos por nível).
+- **Câmera**: passou por duas rodadas de ajuste no mesmo dia.
+  1. Uma tentativa trocou todo `network.fit(...)` (chamado depois de
+     expandir um nó) pra reajustar mostrando o grafo **inteiro**, não só
+     o pedaço novo -- revertida na hora por feedback direto do usuário
+     ("o autoajuste diminuindo o zoom não deve acontecer, o usuário se
+     perde").
+  2. Voltar pro `network.fit({{ nodes: [...] }})` escopado só aos nós novos
+     (o que já existia antes da tentativa 1) **ainda não resolvia** --
+     `fit()` sempre recalcula o zoom pro nível que encaixa os nós dados
+     na tela, não importa o escopo. Zoom manual que a pessoa já tivesse
+     ajustado (deu zoom, foi abrir outro nó) voltava sozinho pro nível
+     de "encaixe" a cada clique -- o usuário apontou isso especificamente
+     ("dou zoom e vou abrir um nó com filhos, ele autoajusta... mas o
+     zoom deve ficar o que já estava").
+
+  Fix final: `focusNewNodes(nodeIds)` -- em vez de `fit()`, usa
+  `network.moveTo({{ position: <centro dos nós novos>, scale:
+  network.getScale() }})`. `moveTo` desloca a câmera (pan) pro centro do
+  que apareceu, mas a escala passada é a **atual** (lida antes de mexer
+  em qualquer coisa), nunca uma recalculada -- zoom nunca muda sozinho,
+  só a posição. Testado de verdade: `network.moveTo({{scale: 2.5}})`
+  simulando zoom manual, depois `onNodeClick` numa pasta com filhos --
+  `network.getScale()` antes e depois deram exatamente `2.5`. O
+  `network.fit()` sem argumento no `afterDrawing` (primeiro desenho da
+  árvore, antes de qualquer zoom manual existir) continua sendo o único
+  lugar que ainda usa `fit()` -- ali faz sentido, não tem zoom anterior
+  pra preservar.
+
+## 12. Reindexação automática a cada troca completa (2026-09-05)
+
+Antes, a árvore (e o mapa do código de um jeito geral) só refletia
+arquivo editado depois de rodar `.codegraph/reindex.sh` na mão. Pedido
+do usuário: reindexar sozinho sempre que o agente termina uma troca,
+sem precisar lembrar de rodar nada.
+
+Gancho escolhido: dentro de `_log_exchange()` (`proxy.py`), logo depois
+de `history.record_exchange()` gravar com sucesso -- ou seja, o mesmo
+momento que já define "troca completa" pro histórico (seção 11.9/11.10:
+prompt real + resposta final, sem tool-call pendente). Isso não é
+coincidência -- se a resposta não tem mais tool-call pendente, qualquer
+edição que o agente tenha feito nessa rodada (via `Write`/`Edit`/`Bash`,
+ou qualquer tool de qualquer cliente MCP) já aconteceu; é exatamente o
+momento certo pra reindexar, não antes.
+
+`_auto_reindex(project_root, db_path)`:
+- Roda `indexer.index_project(conn, project_root, verbose=False)` (o
+  mesmo indexador do `codegraph setup`/`reindex.sh`) via
+  `asyncio.to_thread` -- não bloqueia a resposta que já foi mandada de
+  volta pro Kimi Code (a chamada em si é fire-and-forget,
+  `asyncio.create_task`, igual o próprio `_log_exchange`).
+- Uma `asyncio.Lock` por projeto (`_reindex_locks`, dict módulo-level)
+  evita duas reindexações do mesmo `.db` rodando em paralelo -- se uma
+  troca terminar (e tentar disparar reindex) antes da reindexação
+  anterior acabar, essa nova chamada só verifica `lock.locked()` e
+  desiste na hora, sem enfileirar nem esperar.
+- Custo quando nada mudou: o indexador já pula arquivo por
+  `content_hash` (seção 4), então rodar de novo sem edição nenhuma é só
+  o custo de ler+hashear cada arquivo de novo -- não refaz chunking. Pra
+  projeto pequeno/médio (o público-alvo aqui) isso é rápido; não foi
+  pensado pra monorepo gigante rodando isso a cada mensagem.
+
+Não é configurável (sem flag pra desligar) -- decisão deliberada de não
+adicionar opção que ninguém pediu ainda; se algum caso de uso real
+precisar desligar, isso vira um campo a mais no
+`.kimi-code/codegraph-history.json` (mesmo arquivo do teto de tamanho,
+seção 9.4) quando pedido.
+
+Continua existindo `.codegraph/reindex.sh` pra reindexar na mão -- útil
+pra quando o arquivo muda **fora** de uma troca de mensagem (criei um
+arquivo novo direto no editor, por exemplo, sem passar pelo agente) ou
+quando nenhum projeto está marcado como ativo ainda.
+
+### 12.1 Rota `/health` de verdade (2026-09-05)
+
+Achado revisando o alias `llama-qwen` do usuário (script de shell que
+sobe proxy + `llama-server` com um comando só, ver `KIMI_CONFIG.md`): ele
+checa `curl http://127.0.0.1:8081/health` pra saber se o proxy já subiu
+antes de tentar subir de novo. Só que `/health` não existia como rota --
+caía no catch-all (`passthrough`), que tenta repassar pro `llama-server`
+upstream; antes do `llama-server` ter subido, isso vira `ConnectError` ->
+resposta 500. O script "funcionava" mesmo assim só porque `curl` sem
+`-f` considera qualquer resposta HTTP (mesmo erro) como sucesso -- não
+testava saúde nenhuma de verdade, só "alguma coisa respondeu na porta".
+
+Fix: rota `GET /health` dedicada, devolve `{"ok": true}` sem depender do
+upstream estar de pé -- registrada antes do catch-all (Starlette casa
+rota em ordem de declaração). Scripts externos que já checavam
+`/health` continuam funcionando, só que agora testando saúde de verdade.
+
+### 12.2 Terceira aba do dashboard: "Saúde" (2026-09-05)
+
+Pedido do usuário depois do fix da seção 12.1: mostrar isso numa aba do
+`/dashboard`, não só num endpoint pra script de terminal ler. Diferente
+do `/health` (liveness simples, pra script externo), essa é uma visão
+agregada pensada pra pessoa olhando a tela decidir "tá tudo bem ou
+preciso mexer em algo":
+
+Endpoint novo, `GET /api/health` (`api_health()`, `proxy.py`) --
+agregando, sem inventar nada que não seja checável de verdade:
+- **modelo (llama-server)**: faz `GET {UPSTREAM}/health` de verdade
+  (timeout de 2s) -- `ok` se HTTP 200, `carregando` se responde com
+  outro código (modelo ainda subindo), `fora do ar` se a conexão falhar.
+- **projeto ativo**: `state.get_active_project()` -- mesmo estado que já
+  decide onde o histórico é gravado (seção 9).
+- **banco de dados**: existe? tamanho em disco; contagem de nós por
+  tipo (`file`/`file_context`/`flow`/`flow_step`/`history`) -- mesma
+  query simples usada em `metrics.py`, só que direto aqui pra não
+  acoplar num helper que não serve pros outros campos.
+- **reindexação automática**: olha o mesmo dict `_reindex_locks` da
+  seção 12 -- `locked()` verdadeiro quer dizer que uma reindexação
+  disparada por uma troca completa está rodando agora nesse instante
+  (informativo, não é erro nem sucesso -- por isso sem cor verde/
+  vermelha fixa nesse card).
+
+Front-end: aba "Saúde" carrega sob demanda (só busca `/api/health` no
+primeiro clique, mesmo padrão lazy-load da aba Árvore) e o botão
+"🔄 Atualizar saúde" força de novo a qualquer momento. Cada card usa
+verde/vermelho/cinza (`healthCard()`) conforme o campo é claramente bom,
+claramente ruim, ou só informativo -- testado ao vivo com
+`llama-server` + proxy no ar: os 6 cards vieram certos (modelo "ok",
+projeto ativo, banco existente com contagem, reindexação "ociosa").

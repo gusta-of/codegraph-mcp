@@ -70,11 +70,27 @@ já existirem, e escreve/atualiza `.kimi-code/mcp.json` dentro do projeto
 novo sempre que o projeto mudar -- é idempotente (arquivo sem mudança de
 hash é pulado, `mcp.json` é atualizado no lugar, não duplicado).
 
+Ele também acrescenta um bloco em `.kimi-code/AGENTS.md` instruindo o
+agente a preferir as tools do codegraph antes de ler arquivo inteiro ou
+usar `Grep` no projeto todo (também idempotente -- não escreve de novo
+se já existir, não apaga nada que eu tenha escrito nesse arquivo). Sem
+isso, ter o servidor MCP conectado não é suficiente -- confirmado de
+verdade: mesmo com as tools disponíveis, o agente simplesmente nunca
+escolhia usá-las sozinho (0% de uso em dezenas de trocas reais) até esse
+bloco existir (detalhe completo no `ARQUITETURA.md`, seção 10.8).
+
 Ele também deixa um atalho pronto dentro do próprio projeto --
 `.codegraph/reindex.sh` (ou `.bat` no Windows) -- já com o caminho certo
 preenchido. Depois da primeira vez, pra atualizar o grafo (fui criando
 arquivo novo, por exemplo), não preciso mais lembrar o comando completo:
 só rodo esse arquivo.
+
+**Também reindexa sozinho** a cada troca completa (o agente termina de
+responder, edições já aplicadas) -- o proxy dispara isso em background,
+sem travar a resposta, e pula reindexar de novo se ainda tiver uma
+reindexação rodando. Continuo podendo rodar `reindex.sh` na mão pra
+mudança feita fora de uma conversa (editei um arquivo direto, sem o
+agente). Detalhe técnico: `ARQUITETURA.md`, seção 12.
 
 ⚠️ **Reindexar só atualiza o mapa do código -- o histórico de conversas
 fica intacto**, sempre (confirmado no código, `ARQUITETURA.md` seção
@@ -209,7 +225,7 @@ verdade: inseri ~5 MB de histórico, forcei um teto apertado, e o arquivo
 | `list_files()` | Lista todos os arquivos indexados |
 | `get_file_tree(path)` | Nó `file` + lista dos `file_context` filhos (nome/linhas, sem conteúdo) |
 | `get_node(node_id)` | Nó completo (com conteúdo) + filhos + arestas relacionadas |
-| `search(query, limit)` | Busca full-text (sintaxe FTS5) por nome/conteúdo em qualquer nó -- inclui histórico |
+| `search(query, limit)` | Busca full-text por palavras-chave (separadas por espaço, todas precisam aparecer) em qualquer nó -- inclui histórico. Nome de arquivo com ponto/hífen funciona normal (`audio.ts`) |
 | `list_flows()` | Lista os fluxos de lógica carregados |
 | `get_flow(name)` | Fluxo completo: passos em ordem, cada um já resolvido com o código que o implementa |
 | `list_history(limit)` | Entradas de prompt+resposta mais recentes deste projeto, mais nova primeiro |
@@ -243,29 +259,74 @@ re-processa arquivos que já estavam indexados e não mudaram. Rodei
 `rm .codegraph/graph.db` + `setup-project.sh` de novo pra ver o efeito
 em tudo -- é o jeito de sempre que eu mudar como o chunking funciona.
 
-## Dashboard de efetividade
+## Dashboard de efetividade + árvore interativa
 
 ```
 http://localhost:8081/dashboard
 ```
 
-(o proxy já expõe isso sozinho, não precisa subir nada a mais). Mostra,
-com dado real do projeto ativo: cobertura de indexação (% de contextos
-com chunking de verdade vs. fallback de linha), volume de conversas,
-% de trocas que usaram alguma tool do `codegraph-mcp`, tokens/s médio de
-geração, e uma estimativa de tokens poupados -- **estimativa mesmo,
-rotulada como tal no rodapé da página**, não finjo que é medição exata
-(explicado em detalhe no `ARQUITETURA.md`, seção 10). Os números de
-token/velocidade são reais, direto do `llama-server` (`usage`/`timings`
-da API) -- isso sim é medição, não estimativa.
+(o proxy já expõe isso sozinho, não precisa subir nada a mais). Tem duas
+abas:
 
-⚠️ **Testei contra uso real e "tokens poupados" ficou em 0** -- não é
-bug: significa que o modelo usou 0% das minhas tools nas trocas
-registradas (ele tem tool de leitura de arquivo nativa do Kimi Code e
-usa ela por padrão; sem fluxo mapeado, também não tem muito motivo pra
-preferir `get_flow`). Pra ver um número real: pedir explícito no prompt
-pra usar `search`/`get_flow`, ou mapear um fluxo de verdade primeiro.
-Causa completa e o porquê na `ARQUITETURA.md`, seção 10.6.
+- **Visão geral**: com dado real do projeto ativo -- cobertura de
+  indexação (% de contextos com chunking de verdade vs. fallback de
+  linha), volume de conversas, % de trocas que usaram alguma tool do
+  `codegraph-mcp`, tokens/s médio de geração, e uma estimativa de tokens
+  poupados -- **estimativa mesmo, rotulada como tal no rodapé da
+  página**, não finjo que é medição exata (explicado em detalhe no
+  `ARQUITETURA.md`, seção 10). Os números de token/velocidade são reais,
+  direto do `llama-server` (`usage`/`timings` da API) -- isso sim é
+  medição, não estimativa.
+- **Árvore**: navegação visual do grafo -- zoom, arrasto, clique num nó
+  pra ver o conteúdo e expandir os filhos. Arquivos vêm agrupados por
+  pasta (senão um projeto com centenas de arquivos vira uma parede
+  ilegível de nós). Tem um nó "🕒 Histórico (memória)" na raiz também --
+  as conversas reais (prompt+resposta) ficam navegáveis igual ao código,
+  não só nos gráficos da Visão geral; cada uma aparece com um número
+  (`#123`, a ordem real de entrada -- passar o mouse mostra a pergunta e
+  resposta completas, não dava pra usar texto no próprio rótulo porque
+  muitas conversas parecidas ficavam uma parede ilegível de texto
+  cortado). Histórico vem **paginado** (mais recentes primeiro, 20 por
+  vez) -- clicar em "… carregar mais antigas" busca a próxima leva, não
+  trava a tela desenhando tudo de uma vez em projetos com muita conversa
+  acumulada. Só entram na árvore/no dashboard trocas **completas**
+  (prompt real do usuário + resposta final de verdade, sem tool-call
+  pendente) -- lembretes internos do Kimi Code e passos intermediários
+  de um loop de tool-calling não viram memória (detalhe no
+  `ARQUITETURA.md`, seções 11.9-11.10). Linha sólida = hierarquia; linha
+  tracejada laranja = referência cruzada (passo de fluxo → trecho que
+  implementa). Cada clique só desloca a câmera até o que acabou de abrir
+  -- nunca muda o zoom que eu já tinha ajustado na mão, mesmo escondido
+  num canto da tela. Do lado
+  esquerdo dos botões tem o tamanho atual do grafo (MB/GB) e quanto já
+  foi preenchido do teto de histórico configurável -- dá pra editar esse
+  teto ali mesmo, mas só pra cima: tentar um valor menor que o banco já
+  ocupa hoje é recusado com uma explicação (apagar o `.codegraph/graph.db`
+  manualmente e reindexar é o único jeito de encolher de verdade). Botão
+  **🔄 Atualizar árvore** (reindexei/rodei prompts novos, quero ver sem
+  recarregar a página) e **🖥️ Tela cheia** (abre numa janela nova,
+  maior). Detalhe técnico completo -- inclusive os bugs reais achados
+  testando de verdade (um deles derrubou o Chrome; outro gravava
+  conversa incompleta -- lembrete de sistema como "pergunta" e resposta
+  vazia -- na memória) e como validei sem conseguir print de tela
+  (achado curioso sobre `requestAnimationFrame` em aba de automação em
+  segundo plano) -- na `ARQUITETURA.md`, seção 11.
+- **Saúde**: visão rápida de "tá tudo bem?" -- modelo (`llama-server`)
+  respondendo ou não, projeto ativo, banco de dados existe/tamanho/
+  contagem de nós, e se uma reindexação automática (próxima seção) está
+  rodando agora. Carrega sob demanda (só busca ao clicar na aba), botão
+  **🔄 Atualizar saúde** força de novo. Detalhe técnico:
+  `ARQUITETURA.md`, seção 12.2.
+
+⚠️ **Testei contra uso real e "tokens poupados" ficou em 0"** num
+primeiro momento -- não era bug de contagem (isso também existiu e foi
+corrigido, ver seção 10.7), era o modelo simplesmente nunca escolhendo
+usar as tools sozinho, mesmo com o MCP conectado certo. Causa raiz: ter
+a tool disponível não basta, precisa de instrução explícita dizendo pra
+preferir ela -- por isso `codegraph setup` agora gera um
+`.kimi-code/AGENTS.md` com essa orientação (seção "Registrar no Kimi
+Code" acima). Confirmado de verdade que muda o comportamento
+(`ARQUITETURA.md`, seção 10.8).
 
 `?project=/caminho/de/outro/projeto` na URL pra ver o dashboard de um
 projeto que não é o ativo no momento.
